@@ -175,11 +175,20 @@
     return Math.floor((stripTime(new Date()) - stripTime(d))/86400000);
   }
   function stripTime(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate());}
+  function suggestedPriority(p){
+    if(norm(p.priority)) return norm(p.priority)==='medium'?'mid':norm(p.priority); // manager-set wins
+    var nums=String(p.delivery_term||'').match(/\d+/g);
+    if(nums && nums.length){
+      var d=Math.max.apply(null, nums.map(Number));
+      if(d<=3) return 'high'; if(d<=7) return 'mid'; return 'low';
+    }
+    return 'mid'; // default when no delivery term stated
+  }
   function targetDays(p){
     var nums = String(p.delivery_term||'').match(/\d+/g);
     if(nums && nums.length) return Math.max.apply(null, nums.map(Number));
-    var pr = norm(p.priority);
-    if(pr==='high') return 3; if(pr==='mid'||pr==='medium') return 5; if(pr==='low') return 7;
+    var pr = suggestedPriority(p);
+    if(pr==='high') return 3; if(pr==='low') return 7;
     return 5;
   }
   function isOpen(p){
@@ -190,11 +199,10 @@
 
   // ---- pills ----
   function priorityPill(p){
-    var pr=norm(p.priority);
+    var pr=suggestedPriority(p);
     if(pr==='high') return '<span class="pill p-high">High</span>';
-    if(pr==='mid'||pr==='medium') return '<span class="pill p-mid">Mid</span>';
     if(pr==='low') return '<span class="pill p-low">Low</span>';
-    return '';
+    return '<span class="pill p-mid">Mid</span>';
   }
   function dispatchPill(p){
     var d=norm(p.dispatch_status);
