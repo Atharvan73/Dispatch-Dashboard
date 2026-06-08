@@ -247,11 +247,11 @@
     var el=document.getElementById('list');
     if(!ALL.length){ el.innerHTML='<div class="state">No orders yet. Run the sync, then refresh.</div>'; return; }
     if(!rows.length){ el.innerHTML='<div class="state">No orders in this filter.</div>'; return; }
-    // overdue first, then newest by ageing
+    // newest PO date first; undated go last
     rows.sort(function(a,b){
-      var oa=isOverdue(a)?1:0, ob=isOverdue(b)?1:0;
-      if(oa!==ob) return ob-oa;
-      return (ageDays(b)||0)-(ageDays(a)||0);
+      var da=parseDate(a.po_date), db=parseDate(b.po_date);
+      var ta=da?da.getTime():-Infinity, tb=db?db.getTime():-Infinity;
+      return tb-ta;
     });
     el.innerHTML = rows.map(tile).join('');
     document.getElementById('count').textContent = rows.length+' of '+ALL.length+' orders';
