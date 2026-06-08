@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f5f4ef; --surface:#ffffff; --ink:#1c1b17; --muted:#6c6a60; --faint:#9a978c;
+    --line:#e6e3da; --line2:#d9d6cb; --accent:#15655a; --accent-soft:#e2eeeb;
+    --ok:#2f7d4f; --ok-soft:#e6f1ea; --warn:#9c6a12; --warn-soft:#f6ecd8;
+    --danger:#b23b2e; --danger-soft:#f6e3df; --slate:#3a567f; --slate-soft:#e6ebf3;
+    --neutral-soft:#edebe4;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:"Hanken Grotesk",sans-serif;background:var(--bg);color:var(--ink);
+    -webkit-font-smoothing:antialiased;line-height:1.45}
+  .mono{font-family:"JetBrains Mono",monospace}
+
+  .topbar{position:sticky;top:0;z-index:10;background:rgba(245,244,239,.9);
+    backdrop-filter:saturate(140%) blur(8px);border-bottom:1px solid var(--line);
+    display:flex;align-items:center;justify-content:space-between;padding:14px 20px}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:700;letter-spacing:-.01em}
+  .brand .dot{width:9px;height:9px;border-radius:50%;background:var(--accent)}
+  .brand small{font-weight:500;color:var(--faint);letter-spacing:0}
+  .refresh{font:inherit;font-size:13px;color:var(--muted);background:none;border:1px solid var(--line2);
+    border-radius:8px;padding:6px 12px;cursor:pointer}
+  .refresh:hover{color:var(--ink);border-color:var(--ink)}
+
+  .wrap{max-width:760px;margin:0 auto;padding:22px 20px 60px}
+  .head{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:16px}
+  .head h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
+  .head .count{font-size:13px;color:var(--muted)}
+
+  .chips{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}
+  .chip{font:inherit;font-size:13px;font-weight:500;padding:6px 13px;border-radius:999px;
+    border:1px solid var(--line2);background:var(--surface);color:var(--muted);cursor:pointer;
+    display:inline-flex;align-items:center;gap:6px}
+  .chip:hover{border-color:var(--ink);color:var(--ink)}
+  .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+  .chip .n{font-size:11px;opacity:.7}
+
+  .tile{background:var(--surface);border:1px solid var(--line);border-radius:14px;
+    padding:16px 18px;margin-bottom:12px;transition:border-color .15s, box-shadow .15s}
+  .tile:hover{border-color:var(--line2);box-shadow:0 1px 0 rgba(0,0,0,.02),0 8px 24px -16px rgba(0,0,0,.18)}
+  .t-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+  .t-title{font-size:16px;font-weight:600;letter-spacing:-.01em}
+  .t-sub{font-size:13px;color:var(--muted);margin-top:2px}
+  .t-sub .mono{color:var(--ink)}
+  .meta{display:flex;gap:16px;flex-wrap:wrap;margin-top:10px;font-size:13px;color:var(--muted)}
+  .meta span{display:inline-flex;align-items:center;gap:5px}
+  .meta .ic{width:14px;height:14px;flex:none;color:var(--faint)}
+  .status{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+  .foot{display:flex;justify-content:space-between;align-items:center;margin-top:13px;
+    padding-top:12px;border-top:1px solid var(--line)}
+  .who{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+  .av{width:26px;height:26px;border-radius:50%;background:var(--slate-soft);color:var(--slate);
+    display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}
+  .links{display:flex;gap:8px}
+  .btn{font:inherit;font-size:12.5px;color:var(--ink);background:none;border:1px solid var(--line2);
+    border-radius:8px;padding:6px 11px;cursor:pointer;text-decoration:none;display:inline-flex;
+    align-items:center;gap:5px}
+  .btn:hover{border-color:var(--ink)}
+  .btn.go{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.go:hover{filter:brightness(1.05)}
+
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:600;
+    padding:3px 9px;border-radius:8px;white-space:nowrap}
+  .p-new{background:var(--accent-soft);color:var(--accent)}
+  .p-high{background:var(--danger-soft);color:var(--danger)}
+  .p-mid{background:var(--warn-soft);color:var(--warn)}
+  .p-low{background:var(--neutral-soft);color:var(--muted)}
+  .s-none{background:var(--neutral-soft);color:var(--muted)}
+  .s-proc{background:var(--slate-soft);color:var(--slate)}
+  .s-part{background:var(--warn-soft);color:var(--warn)}
+  .s-disp{background:var(--ok-soft);color:var(--ok)}
+  .s-deliv{background:var(--ok-soft);color:var(--ok)}
+  .s-pend{border:1px solid var(--line2);color:var(--muted)}
+  .overdue{color:var(--danger)!important;font-weight:500}
+
+  .state{text-align:center;color:var(--muted);padding:60px 20px;font-size:14px}
+  .spin{width:22px;height:22px;border:2.5px solid var(--line2);border-top-color:var(--accent);
+    border-radius:50%;animation:sp .7s linear infinite;margin:0 auto 12px}
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);
+    background:var(--ink);color:#fff;font-size:13px;padding:10px 16px;border-radius:10px;
+    opacity:0;pointer-events:none;transition:.25s}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="brand"><span class="dot"></span>Shakti Dispatch <small>· board</small></div>
+    <button class="refresh" onclick="load()">↻ Refresh</button>
+  </div>
+
+  <div class="wrap">
+    <div class="head">
+      <h1>Dispatch board</h1>
+      <span class="count" id="count"></span>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div id="list">
+      <div class="state"><div class="spin"></div>Loading orders…</div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+  var ALL = [];
+  var FILTER = 'all';
+  var FILTERS = [
+    {key:'all',     label:'All',         test:function(){return true;}},
+    {key:'unassigned', label:'Unassigned', test:function(p){return !p.assigned_rep;}},
+    {key:'notdisp', label:'Not dispatched', test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
+    {key:'process', label:'Under process',  test:function(p){return norm(p.dispatch_status).indexOf('process')>-1;}},
+    {key:'delivered', label:'Delivered',   test:function(p){return norm(p.delivery_status)==='delivered';}},
+    {key:'closed',  label:'Closed',        test:function(p){return norm(p.closure_status)==='closed';}}
+  ];
+
+  function norm(s){return String(s||'').trim().toLowerCase();}
+  function esc(s){return String(s||'').replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c];});}
+
+  // Paste your Apps Script Web app deployment URL here:
+  var API = 'https://script.google.com/macros/s/AKfycbxnPSYOhWuoHA9XgrXDuz7ffBLsY0zc-5hUBAqI0_wEb9X5J3juJPGBtylfzt2V0wQLig/exec';
+
+  function load(){
+    document.getElementById('list').innerHTML='<div class="state"><div class="spin"></div>Loading orders…</div>';
+    fetch(API + '?action=getPOs')
+      .then(function(r){ return r.json(); })
+      .then(onData)
+      .catch(onErr);
+  }
+  function onErr(e){
+    document.getElementById('list').innerHTML='<div class="state">Couldn\'t load orders.<br>'+esc(e&&e.message)+'</div>';
+  }
+  function onData(rows){ ALL = rows || []; renderChips(); render(); }
+
+  // ---- date / ageing ----
+  function parseDate(s){
+    var m = String(s||'').match(/^(\d{1,2})-(\d{1,2})-(\d{4})$/);
+    if(!m) return null;
+    return new Date(+m[3], +m[2]-1, +m[1]);
+  }
+  function ageDays(p){
+    var d = parseDate(p.po_date); if(!d) return null;
+    return Math.floor((stripTime(new Date()) - stripTime(d))/86400000);
+  }
+  function stripTime(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate());}
+  function targetDays(p){
+    var nums = String(p.delivery_term||'').match(/\d+/g);
+    if(nums && nums.length) return Math.max.apply(null, nums.map(Number));
+    var pr = norm(p.priority);
+    if(pr==='high') return 3; if(pr==='mid'||pr==='medium') return 5; if(pr==='low') return 7;
+    return 5;
+  }
+  function isOpen(p){
+    var d=norm(p.dispatch_status);
+    return d!=='dispatched' && norm(p.delivery_status)!=='delivered' && norm(p.closure_status)!=='closed';
+  }
+  function isOverdue(p){ var a=ageDays(p); return a!=null && isOpen(p) && a>targetDays(p); }
+
+  // ---- pills ----
+  function priorityPill(p){
+    var pr=norm(p.priority);
+    if(pr==='high') return '<span class="pill p-high">High</span>';
+    if(pr==='mid'||pr==='medium') return '<span class="pill p-mid">Mid</span>';
+    if(pr==='low') return '<span class="pill p-low">Low</span>';
+    return '';
+  }
+  function dispatchPill(p){
+    var d=norm(p.dispatch_status);
+    if(d==='dispatched') return '<span class="pill s-disp">Dispatched</span>';
+    if(d.indexOf('partial')>-1) return '<span class="pill s-part">Partially dispatched</span>';
+    if(d.indexOf('process')>-1) return '<span class="pill s-proc">'+esc(p.dispatch_status)+'</span>';
+    return '<span class="pill s-none">Not dispatched</span>';
+  }
+  function deliveryPill(p){
+    if(norm(p.delivery_status)==='delivered') return '<span class="pill s-deliv">Delivered</span>';
+    return '<span class="pill s-pend">Delivery pending</span>';
+  }
+  function initials(name){
+    var parts=String(name||'').trim().split(/\s+/);
+    if(!parts[0]) return '?';
+    return (parts[0][0]+(parts.length>1?parts[parts.length-1][0]:'')).toUpperCase();
+  }
+
+  function tile(p){
+    var age=ageDays(p), over=isOverdue(p), isNew=(age!=null && age<=2);
+    var items=p.item_count||0;
+    var sub='<span class="mono">'+esc(p.po_number)+'</span> · '+esc(p.customer_name)+' · '+items+' item'+(items===1?'':'s');
+    var ageTxt = age==null ? '' : '<span class="'+(over?'overdue':'')+'">'+ICON('clock')+(age===0?'today':age+' day'+(age===1?'':'s')+' old')+(over?' · overdue':'')+'</span>';
+    var buyer = (p.buyer_name||p.customer_email) ?
+      '<div class="meta">'+(p.buyer_name?'<span>'+ICON('user')+esc(p.buyer_name)+'</span>':'')+(p.customer_email?'<span>'+ICON('mail')+esc(p.customer_email)+'</span>':'')+'</div>' : '';
+    var who = p.assigned_rep
+      ? '<span class="who"><span class="av">'+esc(initials(p.assigned_rep))+'</span>'+esc(p.assigned_rep)+'</span>'
+      : '<span class="who">'+ICON('user')+'Unassigned</span>';
+    var poCopy = p.po_file_link ? '<a class="btn" href="'+esc(p.po_file_link)+'" target="_blank">'+ICON('file')+'PO copy</a>' : '';
+
+    return '<div class="tile">'
+      + '<div class="t-top"><div style="min-width:0">'
+      +   '<div class="t-title">'+esc(p.title||p.customer_name||'Untitled PO')+'</div>'
+      +   '<div class="t-sub">'+sub+'</div>'
+      + '</div>'+ (isNew?'<span class="pill p-new">New</span> ':'') + priorityPill(p) +'</div>'
+      + buyer
+      + '<div class="meta">'
+      +   (p.po_date?'<span>'+ICON('cal')+'PO '+esc(p.po_date)+'</span>':'')
+      +   (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
+      +   ageTxt
+      + '</div>'
+      + '<div class="status">'+dispatchPill(p)+deliveryPill(p)+'</div>'
+      + '<div class="foot">'+who+'<div class="links">'+poCopy+'<button class="btn go" onclick="openDetail(\''+esc(p.po_id)+'\')">View details →</button></div></div>'
+      + '</div>';
+  }
+
+  function render(){
+    var f = FILTERS.filter(function(x){return x.key===FILTER;})[0] || FILTERS[0];
+    var rows = ALL.filter(f.test);
+    var el=document.getElementById('list');
+    if(!ALL.length){ el.innerHTML='<div class="state">No orders yet. Run the sync, then refresh.</div>'; return; }
+    if(!rows.length){ el.innerHTML='<div class="state">No orders in this filter.</div>'; return; }
+    // overdue first, then newest by ageing
+    rows.sort(function(a,b){
+      var oa=isOverdue(a)?1:0, ob=isOverdue(b)?1:0;
+      if(oa!==ob) return ob-oa;
+      return (ageDays(b)||0)-(ageDays(a)||0);
+    });
+    el.innerHTML = rows.map(tile).join('');
+    document.getElementById('count').textContent = rows.length+' of '+ALL.length+' orders';
+  }
+
+  function renderChips(){
+    document.getElementById('chips').innerHTML = FILTERS.map(function(f){
+      var n = ALL.filter(f.test).length;
+      return '<button class="chip'+(f.key===FILTER?' on':'')+'" onclick="setFilter(\''+f.key+'\')">'+f.label+' <span class="n">'+n+'</span></button>';
+    }).join('');
+  }
+  function setFilter(k){ FILTER=k; renderChips(); render(); }
+
+  function openDetail(id){ toast('Detail view is the next step.'); }
+
+  var toastT;
+  function toast(msg){
+    var t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show');
+    clearTimeout(toastT); toastT=setTimeout(function(){t.classList.remove('show');},2200);
+  }
+
+  // tiny inline icons
+  function ICON(n){
+    var p={
+      clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+      user:'<circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 4-6 8-6s8 2 8 6"/>',
+      mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 7l9 6 9-6"/>',
+      cal:'<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
+      pin:'<path d="M12 21s7-6 7-11a7 7 0 0 0-14 0c0 5 7 11 7 11z"/><circle cx="12" cy="10" r="2.5"/>',
+      file:'<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/>'
+    };
+    return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+p[n]+'</svg>';
+  }
+
+  load();
+</script>
+</body>
+</html>
