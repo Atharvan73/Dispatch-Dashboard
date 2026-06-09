@@ -3,7 +3,8 @@
   Shakti Dispatch — Dispatch Dashboard
   Changelog
   v1.0  Board + filters, PO detail view, manager home (pulse strip + needs-attention),
-        DD-MM-YYYY date handling, newest-first sort, auto-suggested priority.
+        DD-MM-YYYY date handling, newest-first sort, auto-suggested priority,
+        "New" badge as a top-left corner tab.
 -->
 <html>
 <head>
@@ -47,8 +48,10 @@
   .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
   .chip .n{font-size:11px;opacity:.7}
 
-  .tile{background:var(--surface);border:1px solid var(--line);border-radius:14px;
+  .tile{position:relative;background:var(--surface);border:1px solid var(--line);border-radius:14px;
     padding:16px 18px;margin-bottom:12px;transition:border-color .15s, box-shadow .15s}
+  .newtag{position:absolute;top:-9px;left:16px;font-size:11px;font-weight:600;letter-spacing:.02em;
+    background:var(--accent);color:#fff;padding:2px 9px;border-radius:999px;box-shadow:0 1px 3px rgba(0,0,0,.14)}
   .tile:hover{border-color:var(--line2);box-shadow:0 1px 0 rgba(0,0,0,.02),0 8px 24px -16px rgba(0,0,0,.18)}
   .t-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
   .t-title{font-size:16px;font-weight:600;letter-spacing:-.01em}
@@ -272,10 +275,11 @@
     var poCopy = p.po_file_link ? '<a class="btn" href="'+esc(p.po_file_link)+'" target="_blank">'+ICON('file')+'PO copy</a>' : '';
 
     return '<div class="tile">'
+      + (isNew?'<span class="newtag">New</span>':'')
       + '<div class="t-top"><div style="min-width:0">'
       +   '<div class="t-title">'+esc(p.title||p.customer_name||'Untitled PO')+'</div>'
       +   '<div class="t-sub">'+sub+'</div>'
-      + '</div>'+ (isNew?'<span class="pill p-new">New</span> ':'') + priorityPill(p) +'</div>'
+      + '</div>'+ priorityPill(p) +'</div>'
       + buyer
       + '<div class="meta">'
       +   (p.po_date?'<span>'+ICON('cal')+'PO '+esc(p.po_date)+'</span>':'')
