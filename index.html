@@ -5,6 +5,8 @@
   v1.0  Board + filters, PO detail view, manager home (pulse strip + needs-attention),
         DD-MM-YYYY date handling, newest-first sort, auto-suggested priority,
         "New" badge as a top-left corner tab.
+  v1.1  Sign-in (name + 4-digit PIN), per-device session, role-based views
+        (manager cockpit vs rep "My orders").
 -->
 <html>
 <head>
@@ -141,6 +143,24 @@
     border-radius:50%;animation:sp .7s linear infinite;margin:0 auto 12px}
   @keyframes sp{to{transform:rotate(360deg)}}
 
+  .login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
+  .login-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px;
+    max-width:340px;width:100%;box-shadow:0 12px 40px -22px rgba(0,0,0,.35)}
+  .login-card h2{font-size:19px;font-weight:700;letter-spacing:-.01em}
+  .login-card p{font-size:13px;color:var(--muted);margin:3px 0 18px}
+  .login-card label{display:block;font-size:12px;color:var(--muted);margin:0 0 6px 2px}
+  .login-card select,.login-card input{width:100%;font:inherit;font-size:15px;padding:11px 12px;
+    border:1px solid var(--line2);border-radius:10px;background:var(--bg);color:var(--ink);
+    margin-bottom:14px;box-sizing:border-box}
+  .login-card input{letter-spacing:8px;text-align:center}
+  .login-card button{width:100%;font:inherit;font-size:15px;font-weight:600;background:var(--accent);
+    color:#fff;border:none;border-radius:10px;padding:12px;cursor:pointer}
+  .login-card button:disabled{opacity:.5;cursor:default}
+  .login-err{font-size:13px;color:var(--danger);margin-bottom:12px}
+  .userbtn{font:inherit;font-size:13px;color:var(--muted);background:none;border:1px solid var(--line2);
+    border-radius:8px;padding:6px 11px;cursor:pointer}
+  .userbtn:hover{border-color:var(--ink);color:var(--ink)}
+
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);
     background:var(--ink);color:#fff;font-size:13px;padding:10px 16px;border-radius:10px;
     opacity:0;pointer-events:none;transition:.25s}
@@ -148,9 +168,25 @@
 </style>
 </head>
 <body>
+  <div class="login" id="login" style="display:none">
+    <div class="login-card">
+      <h2>Shakti Dispatch</h2>
+      <p>Sign in to continue</p>
+      <div class="login-err" id="loginErr"></div>
+      <label>Name</label>
+      <select id="loginName"></select>
+      <label>4-digit PIN</label>
+      <input id="loginPin" type="password" inputmode="numeric" maxlength="4" placeholder="••••">
+      <button id="loginBtn" onclick="doLogin()">Sign in</button>
+    </div>
+  </div>
+
   <div class="topbar">
     <div class="brand"><span class="dot"></span>Shakti Dispatch <small id="ver"></small></div>
-    <button class="refresh" onclick="load()">↻ Refresh</button>
+    <div style="display:flex;gap:10px;align-items:center">
+      <button class="refresh" onclick="load()">↻ Refresh</button>
+      <button class="userbtn" id="userbtn" onclick="logout()" style="display:none"></button>
+    </div>
   </div>
 
   <div class="wrap" id="board">
@@ -171,9 +207,10 @@
   <div class="toast" id="toast"></div>
 
 <script>
-  var VERSION = 'v1.0';
+  var VERSION = 'v1.1';
   document.getElementById('ver').textContent = VERSION;
 
+  var ME = null;
   var ALL = [];
   var FILTER = 'all';
   var FILTERS = [
@@ -193,6 +230,57 @@
   // Paste your Apps Script Web app deployment URL here:
   var API = 'https://script.google.com/macros/s/AKfycbxnPSYOhWuoHA9XgrXDuz7ffBLsY0zc-5hUBAqI0_wEb9X5J3juJPGBtylfzt2V0wQLig/exec';
 
+  // ---- auth / session ----
+  function start(){
+    try { ME = JSON.parse(localStorage.getItem('dispatch_user') || 'null'); } catch(e){ ME = null; }
+    if (ME && ME.name) enterApp();
+    else showLogin();
+  }
+  function showLogin(){
+    document.getElementById('login').style.display = 'flex';
+    fetch(API + '?action=getUsers')
+      .then(function(r){ return r.json(); })
+      .then(function(u){
+        document.getElementById('loginName').innerHTML =
+          (u||[]).map(function(x){ return '<option value="'+esc(x.name)+'">'+esc(x.name)+'</option>'; }).join('');
+      })
+      .catch(function(){
+        document.getElementById('loginErr').textContent = 'Could not load the user list.';
+      });
+  }
+  function doLogin(){
+    var name = document.getElementById('loginName').value;
+    var pin  = document.getElementById('loginPin').value;
+    var err  = document.getElementById('loginErr'); err.textContent = '';
+    var btn  = document.getElementById('loginBtn'); btn.disabled = true; btn.textContent = 'Signing in…';
+    fetch(API, { method:'POST', body: JSON.stringify({ action:'login', name:name, pin:pin }) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        btn.disabled = false; btn.textContent = 'Sign in';
+        if (res && res.ok){
+          ME = { user_id:res.user_id, name:res.name, role:res.role };
+          localStorage.setItem('dispatch_user', JSON.stringify(ME));
+          document.getElementById('loginPin').value = '';
+          document.getElementById('login').style.display = 'none';
+          enterApp();
+        } else {
+          err.textContent = (res && res.error) || 'Sign in failed';
+        }
+      })
+      .catch(function(){ btn.disabled = false; btn.textContent = 'Sign in'; err.textContent = 'Network error'; });
+  }
+  function logout(){ localStorage.removeItem('dispatch_user'); ME = null; location.reload(); }
+  function enterApp(){
+    var ub = document.getElementById('userbtn');
+    ub.style.display = ''; ub.textContent = ME.name + ' · Sign out';
+    load();
+  }
+  function isManager(){ return ME && norm(ME.role) === 'manager'; }
+  function scopedRows(){
+    if (isManager()) return ALL;
+    return ALL.filter(function(p){ return norm(p.assigned_rep) === norm(ME && ME.name); });
+  }
+
   function load(){
     document.getElementById('list').innerHTML='<div class="state"><div class="spin"></div>Loading orders…</div>';
     fetch(API + '?action=getPOs')
@@ -203,7 +291,15 @@
   function onErr(e){
     document.getElementById('list').innerHTML='<div class="state">Couldn\'t load orders.<br>'+esc(e&&e.message)+'</div>';
   }
-  function onData(rows){ ALL = rows || []; renderPulse(); renderAttention(); renderChips(); render(); }
+  function onData(rows){
+    ALL = rows || [];
+    var mgr = isManager();
+    document.getElementById('pulse').style.display = mgr ? '' : 'none';
+    document.getElementById('attention').style.display = mgr ? '' : 'none';
+    document.querySelector('#boardhead h1').textContent = mgr ? 'All orders' : 'My orders';
+    if (mgr){ renderPulse(); renderAttention(); }
+    renderChips(); render();
+  }
 
   // ---- date / ageing ----
   function parseDate(s){
@@ -292,10 +388,11 @@
   }
 
   function render(){
+    var base = scopedRows();
     var f = FILTERS.filter(function(x){return x.key===FILTER;})[0] || FILTERS[0];
-    var rows = ALL.filter(f.test);
+    var rows = base.filter(f.test);
     var el=document.getElementById('list');
-    if(!ALL.length){ el.innerHTML='<div class="state">No orders yet. Run the sync, then refresh.</div>'; return; }
+    if(!base.length){ el.innerHTML='<div class="state">'+(isManager()?'No orders yet. Run the sync, then refresh.':'Nothing assigned to you yet.')+'</div>'; return; }
     if(!rows.length){ el.innerHTML='<div class="state">No orders in this filter.</div>'; return; }
     // newest PO date first; undated go last
     rows.sort(function(a,b){
@@ -304,12 +401,13 @@
       return tb-ta;
     });
     el.innerHTML = rows.map(tile).join('');
-    document.getElementById('count').textContent = rows.length+' of '+ALL.length+' orders';
+    document.getElementById('count').textContent = rows.length+' of '+base.length+' orders';
   }
 
   function renderChips(){
+    var base = scopedRows();
     document.getElementById('chips').innerHTML = FILTERS.map(function(f){
-      var n = ALL.filter(f.test).length;
+      var n = base.filter(f.test).length;
       return '<button class="chip'+(f.key===FILTER?' on':'')+'" onclick="setFilter(\''+f.key+'\')">'+f.label+' <span class="n">'+n+'</span></button>';
     }).join('');
   }
@@ -444,7 +542,11 @@
     return '<svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">'+p[n]+'</svg>';
   }
 
-  load();
+  document.getElementById('loginPin').addEventListener('keydown', function(e){
+    if(e.key==='Enter') doLogin();
+  });
+
+  start();
 </script>
 </body>
 </html>
