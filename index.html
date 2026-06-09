@@ -102,6 +102,31 @@
   .empty{background:var(--surface);border:1px dashed var(--line2);border-radius:14px;
     padding:22px;text-align:center;color:var(--faint);font-size:13px}
 
+  .pulse{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:22px}
+  .kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;
+    cursor:pointer;text-align:left;font:inherit}
+  .kpi:hover{border-color:var(--line2)}
+  .kpi.on{border-color:var(--ink)}
+  .kpi .v{font-size:25px;font-weight:700;letter-spacing:-.02em;line-height:1}
+  .kpi .l{font-size:12px;color:var(--muted);margin-top:7px}
+  .kpi.alert .v{color:var(--danger)}
+  @media(max-width:600px){.pulse{grid-template-columns:repeat(2,1fr)}}
+
+  .attn{margin-bottom:26px}
+  .attn-h{display:flex;align-items:baseline;justify-content:space-between;margin:0 2px 10px}
+  .attn-h h2{font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--muted)}
+  .attn-h .c{font-size:12px;color:var(--faint)}
+  .attn-list{display:flex;flex-direction:column;gap:8px}
+  .arow{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);
+    border-left:3px solid var(--danger);border-radius:10px;padding:11px 14px;cursor:pointer}
+  .arow:hover{border-color:var(--line2)}
+  .arow .ax{min-width:0;flex:1}
+  .arow .at{font-size:14px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .arow .as{font-size:12px;color:var(--faint);margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .arow .ad{font-size:12.5px;color:var(--danger);font-weight:600;white-space:nowrap}
+  .allclear{background:var(--ok-soft);border:1px solid #cfe6d8;color:var(--ok);
+    border-radius:12px;padding:14px 16px;font-size:13px}
+
   .state{text-align:center;color:var(--muted);padding:60px 20px;font-size:14px}
   .spin{width:22px;height:22px;border:2.5px solid var(--line2);border-top-color:var(--accent);
     border-radius:50%;animation:sp .7s linear infinite;margin:0 auto 12px}
@@ -120,8 +145,10 @@
   </div>
 
   <div class="wrap" id="board">
-    <div class="head">
-      <h1>Dispatch board</h1>
+    <div class="pulse" id="pulse"></div>
+    <div id="attention"></div>
+    <div class="head" id="boardhead">
+      <h1>All orders</h1>
       <span class="count" id="count"></span>
     </div>
     <div class="chips" id="chips"></div>
@@ -140,6 +167,8 @@
   var FILTERS = [
     {key:'all',     label:'All',         test:function(){return true;}},
     {key:'unassigned', label:'Unassigned', test:function(p){return !p.assigned_rep;}},
+    {key:'overdue', label:'Overdue', test:function(p){return isOverdue(p);}},
+    {key:'new', label:'New', test:function(p){var a=ageDays(p);return a!=null && a<=2;}},
     {key:'notdisp', label:'Not dispatched', test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
     {key:'process', label:'Under process',  test:function(p){return norm(p.dispatch_status).indexOf('process')>-1;}},
     {key:'delivered', label:'Delivered',   test:function(p){return norm(p.delivery_status)==='delivered';}},
@@ -162,7 +191,7 @@
   function onErr(e){
     document.getElementById('list').innerHTML='<div class="state">Couldn\'t load orders.<br>'+esc(e&&e.message)+'</div>';
   }
-  function onData(rows){ ALL = rows || []; renderChips(); render(); }
+  function onData(rows){ ALL = rows || []; renderPulse(); renderAttention(); renderChips(); render(); }
 
   // ---- date / ageing ----
   function parseDate(s){
@@ -271,7 +300,54 @@
       return '<button class="chip'+(f.key===FILTER?' on':'')+'" onclick="setFilter(\''+f.key+'\')">'+f.label+' <span class="n">'+n+'</span></button>';
     }).join('');
   }
-  function setFilter(k){ FILTER=k; renderChips(); render(); }
+  function renderPulse(){
+    var open = ALL.filter(isOpen).length;
+    var unassigned = ALL.filter(function(p){return !p.assigned_rep;}).length;
+    var overdue = ALL.filter(isOverdue).length;
+    var fresh = ALL.filter(function(p){var a=ageDays(p);return a!=null && a<=2;}).length;
+    var cards = [
+      {l:'Open',       v:open,       k:'all'},
+      {l:'Unassigned', v:unassigned, k:'unassigned'},
+      {l:'Overdue',    v:overdue,    k:'overdue', alert:overdue>0},
+      {l:'New (≤2d)',  v:fresh,      k:'new'}
+    ];
+    document.getElementById('pulse').innerHTML = cards.map(function(c){
+      return '<button class="kpi'+(c.alert?' alert':'')+(FILTER===c.k?' on':'')+'" onclick="setFilter(\''+c.k+'\')">'
+        + '<div class="v">'+c.v+'</div><div class="l">'+c.l+'</div></button>';
+    }).join('');
+  }
+
+  function renderAttention(){
+    var rows = ALL.filter(isOverdue).sort(function(a,b){
+      return (ageDays(b)-targetDays(b)) - (ageDays(a)-targetDays(a)); // most overdue first
+    });
+    var el = document.getElementById('attention');
+    if(!rows.length){
+      el.innerHTML = '<div class="attn"><div class="attn-h"><h2>Needs attention</h2></div>'
+        + '<div class="allclear">✓ All clear — nothing overdue.</div></div>';
+      return;
+    }
+    var top = rows.slice(0,6);
+    var list = top.map(function(p){
+      var od = ageDays(p) - targetDays(p);
+      return '<div class="arow" onclick="openDetail(\''+esc(p.po_id)+'\')">'
+        + '<div class="ax"><div class="at">'+esc(p.title||p.customer_name||'Untitled PO')+'</div>'
+        + '<div class="as">'+esc(p.po_number)+' · '+esc(p.customer_name)+'</div></div>'
+        + priorityPill(p)
+        + '<div class="ad">'+od+'d overdue</div></div>';
+    }).join('');
+    var more = rows.length > top.length
+      ? '<button class="btn" style="margin-top:10px" onclick="setFilter(\'overdue\')">View all '+rows.length+' overdue →</button>'
+      : '';
+    el.innerHTML = '<div class="attn"><div class="attn-h"><h2>Needs attention</h2>'
+      + '<span class="c">'+rows.length+'</span></div>'
+      + '<div class="attn-list">'+list+'</div>'+more+'</div>';
+  }
+
+  function setFilter(k){
+    FILTER=k; renderPulse(); renderChips(); render();
+    document.getElementById('boardhead').scrollIntoView({behavior:'smooth', block:'start'});
+  }
 
   function fmtINR(v){
     var s=String(v==null?'':v).trim();
