@@ -7,6 +7,8 @@
         "New" badge as a top-left corner tab.
   v1.1  Sign-in (name + 4-digit PIN), per-device session, role-based views
         (manager cockpit vs rep "My orders").
+  v1.2  Manager can assign a PO to a rep from the tile and the detail view
+        (write action + Activity Log entry).
 -->
 <html>
 <head>
@@ -66,6 +68,11 @@
   .foot{display:flex;justify-content:space-between;align-items:center;margin-top:13px;
     padding-top:12px;border-top:1px solid var(--line)}
   .who{display:inline-flex;align-items:center;gap:8px;font-size:13px;color:var(--muted)}
+  .assign-wrap{gap:8px}
+  .assign{font:inherit;font-size:13px;color:var(--ink);background:var(--surface);border:1px solid var(--line2);
+    border-radius:8px;padding:5px 8px;cursor:pointer;max-width:170px}
+  .assign:hover{border-color:var(--ink)}
+  .assign:focus{outline:none;border-color:var(--accent)}
   .av{width:26px;height:26px;border-radius:50%;background:var(--slate-soft);color:var(--slate);
     display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}
   .links{display:flex;gap:8px}
@@ -207,7 +214,7 @@
   <div class="toast" id="toast"></div>
 
 <script>
-  var VERSION = 'v1.1';
+  var VERSION = 'v1.2';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -270,15 +277,66 @@
       .catch(function(){ btn.disabled = false; btn.textContent = 'Sign in'; err.textContent = 'Network error'; });
   }
   function logout(){ localStorage.removeItem('dispatch_user'); ME = null; location.reload(); }
+  var REPS = [];
   function enterApp(){
     var ub = document.getElementById('userbtn');
     ub.style.display = ''; ub.textContent = ME.name + ' · Sign out';
-    load();
+    if (isManager()){
+      fetch(API + '?action=getUsers')
+        .then(function(r){ return r.json(); })
+        .then(function(u){ REPS = (u||[]).filter(function(x){return norm(x.role)==='rep';}).map(function(x){return x.name;}); })
+        .catch(function(){ REPS = []; })
+        .then(load);
+    } else {
+      load();
+    }
   }
   function isManager(){ return ME && norm(ME.role) === 'manager'; }
   function scopedRows(){
     if (isManager()) return ALL;
     return ALL.filter(function(p){ return norm(p.assigned_rep) === norm(ME && ME.name); });
+  }
+
+  // Assignee cell: static for reps, an assign dropdown for the manager.
+  function assignee(p){
+    if (!isManager()){
+      return p.assigned_rep
+        ? '<span class="who"><span class="av">'+esc(initials(p.assigned_rep))+'</span>'+esc(p.assigned_rep)+'</span>'
+        : '<span class="who">'+ICON('user')+'Unassigned</span>';
+    }
+    var names = REPS.slice();
+    if (p.assigned_rep && names.map(norm).indexOf(norm(p.assigned_rep)) < 0) names.push(p.assigned_rep);
+    var opts = '<option value="">Unassigned</option>' + names.map(function(n){
+      return '<option value="'+esc(n)+'"'+(norm(n)===norm(p.assigned_rep)?' selected':'')+'>'+esc(n)+'</option>';
+    }).join('');
+    var av = p.assigned_rep ? '<span class="av">'+esc(initials(p.assigned_rep))+'</span>' : ICON('user');
+    return '<span class="who assign-wrap">'+av
+      + '<select class="assign" onclick="event.stopPropagation()" onchange="assignPO(\''+esc(p.po_id)+'\', this.value)">'+opts+'</select></span>';
+  }
+
+  function assignPO(poId, rep){
+    var p = ALL.filter(function(x){return String(x.po_id)===String(poId);})[0];
+    if (!p) return;
+    var prev = p.assigned_rep || '';
+    p.assigned_rep = rep;                 // optimistic
+    refreshViews();
+    fetch(API, { method:'POST', body: JSON.stringify({ action:'assign', po_id:poId, rep:rep, by:(ME&&ME.name)||'' }) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res && res.ok){ toast(rep ? ('Assigned to '+rep) : 'Set to unassigned'); }
+        else { p.assigned_rep = prev; refreshViews(); toast((res&&res.error) || 'Could not assign'); }
+      })
+      .catch(function(){ p.assigned_rep = prev; refreshViews(); toast('Network error'); });
+  }
+
+  function refreshViews(){
+    if (isManager()){ renderPulse(); renderAttention(); }
+    renderChips(); render();
+    var d = document.getElementById('detail');
+    if (d && d.style.display !== 'none' && CURRENT_DETAIL){
+      var p = ALL.filter(function(x){return String(x.po_id)===String(CURRENT_DETAIL);})[0];
+      if (p) d.innerHTML = detailHtml(p);
+    }
   }
 
   function load(){
@@ -365,9 +423,7 @@
     var ageTxt = age==null ? '' : '<span class="'+(over?'overdue':'')+'">'+ICON('clock')+(age===0?'today':age+' day'+(age===1?'':'s')+' old')+(over?' · overdue':'')+'</span>';
     var buyer = (p.buyer_name||p.customer_email) ?
       '<div class="meta">'+(p.buyer_name?'<span>'+ICON('user')+esc(p.buyer_name)+'</span>':'')+(p.customer_email?'<span>'+ICON('mail')+esc(p.customer_email)+'</span>':'')+'</div>' : '';
-    var who = p.assigned_rep
-      ? '<span class="who"><span class="av">'+esc(initials(p.assigned_rep))+'</span>'+esc(p.assigned_rep)+'</span>'
-      : '<span class="who">'+ICON('user')+'Unassigned</span>';
+    var who = assignee(p);
     var poCopy = p.po_file_link ? '<a class="btn" href="'+esc(p.po_file_link)+'" target="_blank">'+ICON('file')+'PO copy</a>' : '';
 
     return '<div class="tile">'
@@ -467,9 +523,11 @@
     return isNaN(n) ? esc(s) : '₹'+n.toLocaleString('en-IN');
   }
 
+  var CURRENT_DETAIL = null;
   function openDetail(id){
     var p = ALL.filter(function(x){return String(x.po_id)===String(id);})[0];
     if(!p){ toast('Order not found.'); return; }
+    CURRENT_DETAIL = id;
     document.getElementById('board').style.display='none';
     var d=document.getElementById('detail');
     d.innerHTML = detailHtml(p);
@@ -477,6 +535,7 @@
     window.scrollTo(0,0);
   }
   function closeDetail(){
+    CURRENT_DETAIL = null;
     document.getElementById('detail').style.display='none';
     document.getElementById('board').style.display='';
   }
@@ -488,9 +547,7 @@
     var ageTxt = age==null ? '' : '<span class="'+(over?'overdue':'')+'">'+ICON('clock')+(age===0?'today':age+' day'+(age===1?'':'s')+' old')+(over?' · overdue':'')+'</span>';
     var buyer = (p.buyer_name||p.customer_email) ?
       '<div class="meta">'+(p.buyer_name?'<span>'+ICON('user')+esc(p.buyer_name)+'</span>':'')+(p.customer_email?'<span>'+ICON('mail')+esc(p.customer_email)+'</span>':'')+'</div>' : '';
-    var who = p.assigned_rep
-      ? '<span class="who"><span class="av">'+esc(initials(p.assigned_rep))+'</span>'+esc(p.assigned_rep)+'</span>'
-      : '<span class="who">'+ICON('user')+'Unassigned</span>';
+    var who = assignee(p);
     var poCopy = p.po_file_link ? '<a class="btn" href="'+esc(p.po_file_link)+'" target="_blank">'+ICON('file')+'PO copy</a>' : '';
 
     var itemRows = items.map(function(it){
