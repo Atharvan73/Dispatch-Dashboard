@@ -9,6 +9,8 @@
         (manager cockpit vs rep "My orders").
   v1.2  Manager can assign a PO to a rep from the tile and the detail view
         (write action + Activity Log entry).
+  v1.3  Processing-stage updates (Open / At source / Processing / Ready) by rep or
+        manager, with a remarks box; each change logged to the Activity Log.
 -->
 <html>
 <head>
@@ -95,7 +97,15 @@
   .s-disp{background:var(--ok-soft);color:var(--ok)}
   .s-deliv{background:var(--ok-soft);color:var(--ok)}
   .s-pend{border:1px solid var(--line2);color:var(--muted)}
+  .s-stage{background:var(--slate-soft);color:var(--slate)}
   .overdue{color:var(--danger)!important;font-weight:500}
+
+  .stage-edit{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;
+    display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+  .stage-edit .assign{max-width:280px}
+  .remark{font:inherit;font-size:13px;width:100%;box-sizing:border-box;min-height:64px;resize:vertical;
+    border:1px solid var(--line2);border-radius:10px;padding:10px;background:var(--bg);color:var(--ink)}
+  .remark:focus{outline:none;border-color:var(--accent)}
 
   /* detail view */
   .back{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;color:var(--muted);
@@ -214,7 +224,7 @@
   <div class="toast" id="toast"></div>
 
 <script>
-  var VERSION = 'v1.2';
+  var VERSION = 'v1.3';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -226,7 +236,7 @@
     {key:'overdue', label:'Overdue', test:function(p){return isOverdue(p);}},
     {key:'new', label:'New', test:function(p){var a=ageDays(p);return a!=null && a<=2;}},
     {key:'notdisp', label:'Not dispatched', test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
-    {key:'process', label:'Under process',  test:function(p){return norm(p.dispatch_status).indexOf('process')>-1;}},
+    {key:'process', label:'Under process',  test:function(p){return norm(p.processing_stage)!=='' && isOpen(p);}},
     {key:'delivered', label:'Delivered',   test:function(p){return norm(p.delivery_status)==='delivered';}},
     {key:'closed',  label:'Closed',        test:function(p){return norm(p.closure_status)==='closed';}}
   ];
@@ -329,6 +339,23 @@
       .catch(function(){ p.assigned_rep = prev; refreshViews(); toast('Network error'); });
   }
 
+  function setStage(poId){
+    var p = ALL.filter(function(x){return String(x.po_id)===String(poId);})[0];
+    if(!p) return;
+    var stage  = document.getElementById('stageSel').value;
+    var remark = (document.getElementById('stageRemark').value||'').trim();
+    var prev   = p.processing_stage || '';
+    p.processing_stage = stage;          // optimistic
+    refreshViews();
+    fetch(API, { method:'POST', body: JSON.stringify({ action:'setStage', po_id:poId, stage:stage, remark:remark, by:(ME&&ME.name)||'' }) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if(res && res.ok){ toast('Stage updated'+(remark?' · remark saved':'')); }
+        else { p.processing_stage=prev; refreshViews(); toast((res&&res.error)||'Could not update stage'); }
+      })
+      .catch(function(){ p.processing_stage=prev; refreshViews(); toast('Network error'); });
+  }
+
   function refreshViews(){
     if (isManager()){ renderPulse(); renderAttention(); }
     renderChips(); render();
@@ -410,6 +437,21 @@
     if(norm(p.delivery_status)==='delivered') return '<span class="pill s-deliv">Delivered</span>';
     return '<span class="pill s-pend">Delivery pending</span>';
   }
+  // ---- processing stage ----
+  var STAGES = [
+    {v:'',           l:'Open'},
+    {v:'At source',  l:'At source'},
+    {v:'Processing', l:'Processing / packing'},
+    {v:'Ready',      l:'Packed — ready for dispatch'}
+  ];
+  function stageLabel(v){
+    for(var i=0;i<STAGES.length;i++){ if(norm(STAGES[i].v)===norm(v)) return STAGES[i].l; }
+    return v || 'Open';
+  }
+  function stagePill(p){
+    if(!norm(p.processing_stage)) return ''; // nothing shown when Open
+    return '<span class="pill s-stage">'+esc(stageLabel(p.processing_stage))+'</span>';
+  }
   function initials(name){
     var parts=String(name||'').trim().split(/\s+/);
     if(!parts[0]) return '?';
@@ -438,7 +480,7 @@
       +   (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +   ageTxt
       + '</div>'
-      + '<div class="status">'+dispatchPill(p)+deliveryPill(p)+'</div>'
+      + '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+'</div>'
       + '<div class="foot">'+who+'<div class="links">'+poCopy+'<button class="btn go" onclick="openDetail(\''+esc(p.po_id)+'\')">View details →</button></div></div>'
       + '</div>';
   }
@@ -570,8 +612,17 @@
       +     (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +     ageTxt
       +   '</div>'
-      +   '<div class="status">'+dispatchPill(p)+deliveryPill(p)+'</div>'
+      +   '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+'</div>'
       +   '<div class="foot">'+who+'<div class="links">'+poCopy+'</div></div>'
+      + '</div>'
+      + '<div class="sec"><div class="sec-h"><h2>Processing stage</h2></div>'
+      +   '<div class="stage-edit">'
+      +     '<select id="stageSel" class="assign">'
+      +       STAGES.map(function(s){ return '<option value="'+esc(s.v)+'"'+(norm(s.v)===norm(p.processing_stage)?' selected':'')+'>'+esc(s.l)+'</option>'; }).join('')
+      +     '</select>'
+      +     '<textarea id="stageRemark" class="remark" placeholder="Add remarks (optional) — e.g. packed 8 of 12 boxes, awaiting transporter"></textarea>'
+      +     '<button class="btn go" onclick="setStage(\''+esc(p.po_id)+'\')">Update stage</button>'
+      +   '</div>'
       + '</div>'
       + '<div class="sec"><div class="sec-h"><h2>Items</h2><span class="c">'+items.length+'</span></div>'
       +   (items.length ? '<div class="items">'+itemRows+'</div>' : '<div class="empty">No line items captured.</div>')
