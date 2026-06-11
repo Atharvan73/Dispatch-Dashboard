@@ -9,8 +9,13 @@
         (manager cockpit vs rep "My orders").
   v1.2  Manager can assign a PO to a rep from the tile and the detail view
         (write action + Activity Log entry).
-  v1.3  Processing-stage updates (Open / At source / Processing / Ready) by rep or
-        manager, with a remarks box; each change logged to the Activity Log.
+  v1.3  Processing-stage updates (Open / Procurement / At source / Processing / Ready)
+        by rep or manager, with a remarks box; each change logged to the Activity Log.
+  v1.4  Assignment form (rep + priority + guidance note in one step): priority shows a
+        delivery-term caution; the manager's note is highlighted in the rep's detail view.
+  v1.5  Tasks: create/assign tasks (manager→anyone, rep→self or teammate with accept/
+        decline), link to a PO via search, due date/time, priority, types incl. Other;
+        overdue carry-forward/close for creator/manager; tasks shown on board + PO detail.
 -->
 <html>
 <head>
@@ -75,6 +80,7 @@
     border-radius:8px;padding:5px 8px;cursor:pointer;max-width:170px}
   .assign:hover{border-color:var(--ink)}
   .assign:focus{outline:none;border-color:var(--accent)}
+  .assign.pri{max-width:92px}
   .av{width:26px;height:26px;border-radius:50%;background:var(--slate-soft);color:var(--slate);
     display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:600}
   .links{display:flex;gap:8px}
@@ -106,6 +112,30 @@
   .remark{font:inherit;font-size:13px;width:100%;box-sizing:border-box;min-height:64px;resize:vertical;
     border:1px solid var(--line2);border-radius:10px;padding:10px;background:var(--bg);color:var(--ink)}
   .remark:focus{outline:none;border-color:var(--accent)}
+
+  /* assignment modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(28,25,20,.45);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px}
+  .modal{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:22px;width:100%;max-width:440px;
+    box-shadow:0 30px 80px -36px rgba(0,0,0,.5);max-height:90vh;overflow:auto}
+  .modal h3{font-size:17px;font-weight:700;letter-spacing:-.01em}
+  .modal .msub{font-size:12.5px;color:var(--faint);margin-bottom:16px}
+  .fld{margin-bottom:15px}
+  .fld>label{display:block;font-size:11px;font-weight:600;color:var(--muted);margin-bottom:7px;text-transform:uppercase;letter-spacing:.04em}
+  .fld .assign,.fld .remark{max-width:none;width:100%;box-sizing:border-box}
+  .seg{display:inline-flex;border:1px solid var(--line2);border-radius:10px;overflow:hidden}
+  .seg-b{font:inherit;font-size:13px;padding:7px 18px;background:var(--surface);border:none;border-right:1px solid var(--line2);cursor:pointer;color:var(--muted)}
+  .seg-b:last-child{border-right:none}
+  .seg-b.active{background:var(--ink);color:#fff}
+  .caution{margin-top:9px;font-size:12.5px;border-radius:9px;padding:9px 11px;line-height:1.4}
+  .caution.warn{background:var(--warn-soft);color:var(--warn)}
+  .caution.none{background:var(--neutral-soft);color:var(--muted)}
+  .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:20px}
+
+  /* manager note callout in detail */
+  .mgr-note{background:var(--warn-soft);border:1px solid #ecdcb6;border-radius:12px;padding:13px 15px;margin-bottom:22px}
+  .mgr-note b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--warn);margin-bottom:4px}
+  .mgr-note span{font-size:13.5px;color:var(--ink);white-space:pre-wrap}
+  .p-note{background:var(--warn-soft);color:var(--warn)}
 
   /* detail view */
   .back{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;color:var(--muted);
@@ -178,6 +208,42 @@
     border-radius:8px;padding:6px 11px;cursor:pointer}
   .userbtn:hover{border-color:var(--ink);color:var(--ink)}
 
+  .modal{max-height:88vh;overflow:auto}
+  .tasks-sec{margin-bottom:24px}
+  .task-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+  .task-tile{background:#fdf6e9;border:1px solid #efe1c2;border-radius:12px;padding:13px 14px;
+    display:flex;flex-direction:column;gap:6px}
+  .task-tile.od{border-color:#eebfb4}
+  .tt-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+  .tt-title{font-size:14px;font-weight:600;line-height:1.25}
+  .ttype{font-size:12px;color:var(--muted)}
+  .tmeta{font-size:12px;color:var(--muted);display:flex;align-items:center;gap:6px}
+  .tmeta.overdue{color:var(--danger);font-weight:500}
+  .tinstr{font-size:12.5px;color:var(--ink);background:rgba(0,0,0,.04);border-radius:8px;padding:6px 8px}
+  .tassign{font-size:12px;color:var(--faint)}
+  .tt-foot{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:2px;flex-wrap:wrap}
+  .tstatus{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .tstatus.open{background:var(--slate-soft);color:var(--slate)}
+  .tstatus.pend{background:var(--warn-soft);color:var(--warn)}
+  .tstatus.done{background:var(--ok-soft);color:var(--ok)}
+  .tstatus.over{background:#f6dcd5;color:var(--danger)}
+  .tt-actions{display:flex;gap:6px;flex-wrap:wrap}
+  .tbtn{font:inherit;font-size:12px;padding:4px 10px;border-radius:7px;border:1px solid var(--line2);
+    background:var(--surface);cursor:pointer;color:var(--ink)}
+  .tbtn:hover{border-color:var(--ink)}
+  .tbtn.ok{background:var(--accent);border-color:var(--accent);color:#fff}
+  .tbtn.warn{border-color:#d9a900;color:#8a6d00}
+  .inp{font:inherit;font-size:13px;width:100%;box-sizing:border-box;padding:9px 10px;
+    border:1px solid var(--line2);border-radius:9px;background:var(--bg);color:var(--ink)}
+  .inp:focus{outline:none;border-color:var(--accent)}
+  .po-hit{font-size:12.5px;padding:7px 9px;border:1px solid var(--line);border-radius:8px;margin-top:4px;
+    cursor:pointer;background:var(--surface)}
+  .po-hit:hover{border-color:var(--ink)}
+  .po-hit.muted{color:var(--faint);cursor:default}
+  .po-chip{display:inline-flex;align-items:center;gap:6px;font-size:12px;background:var(--accent-soft);
+    color:var(--accent);padding:4px 8px;border-radius:999px;margin-top:6px}
+  .po-x{background:none;border:none;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0}
+
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);
     background:var(--ink);color:#fff;font-size:13px;padding:10px 16px;border-radius:10px;
     opacity:0;pointer-events:none;transition:.25s}
@@ -207,6 +273,7 @@
   </div>
 
   <div class="wrap" id="board">
+    <div id="tasks"></div>
     <div class="pulse" id="pulse"></div>
     <div id="attention"></div>
     <div class="head" id="boardhead">
@@ -223,8 +290,11 @@
 
   <div class="toast" id="toast"></div>
 
+  <div id="assignModal"></div>
+  <div id="taskModal"></div>
+
 <script>
-  var VERSION = 'v1.3';
+  var VERSION = 'v1.5';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -288,18 +358,21 @@
   }
   function logout(){ localStorage.removeItem('dispatch_user'); ME = null; location.reload(); }
   var REPS = [];
+  var USERS = [];
+  var TASKS = [];
+  var LINKED_PO = null;
+  var CARRY_TASK = null;
   function enterApp(){
     var ub = document.getElementById('userbtn');
     ub.style.display = ''; ub.textContent = ME.name + ' · Sign out';
-    if (isManager()){
-      fetch(API + '?action=getUsers')
-        .then(function(r){ return r.json(); })
-        .then(function(u){ REPS = (u||[]).filter(function(x){return norm(x.role)==='rep';}).map(function(x){return x.name;}); })
-        .catch(function(){ REPS = []; })
-        .then(load);
-    } else {
-      load();
-    }
+    fetch(API + '?action=getUsers')
+      .then(function(r){ return r.json(); })
+      .then(function(u){
+        USERS = u || [];
+        REPS = USERS.filter(function(x){return norm(x.role)==='rep';}).map(function(x){return x.name;});
+      })
+      .catch(function(){ USERS = []; REPS = []; })
+      .then(function(){ load(); loadTasks(); });
   }
   function isManager(){ return ME && norm(ME.role) === 'manager'; }
   function scopedRows(){
@@ -307,36 +380,70 @@
     return ALL.filter(function(p){ return norm(p.assigned_rep) === norm(ME && ME.name); });
   }
 
-  // Assignee cell: static for reps, an assign dropdown for the manager.
+  // Assignee cell: static for reps; assignee + Assign/Reassign button for the manager.
   function assignee(p){
-    if (!isManager()){
-      return p.assigned_rep
-        ? '<span class="who"><span class="av">'+esc(initials(p.assigned_rep))+'</span>'+esc(p.assigned_rep)+'</span>'
-        : '<span class="who">'+ICON('user')+'Unassigned</span>';
-    }
-    var names = REPS.slice();
-    if (p.assigned_rep && names.map(norm).indexOf(norm(p.assigned_rep)) < 0) names.push(p.assigned_rep);
-    var opts = '<option value="">Unassigned</option>' + names.map(function(n){
-      return '<option value="'+esc(n)+'"'+(norm(n)===norm(p.assigned_rep)?' selected':'')+'>'+esc(n)+'</option>';
-    }).join('');
-    var av = p.assigned_rep ? '<span class="av">'+esc(initials(p.assigned_rep))+'</span>' : ICON('user');
-    return '<span class="who assign-wrap">'+av
-      + '<select class="assign" onclick="event.stopPropagation()" onchange="assignPO(\''+esc(p.po_id)+'\', this.value)">'+opts+'</select></span>';
+    var who = p.assigned_rep
+      ? '<span class="who"><span class="av">'+esc(initials(p.assigned_rep))+'</span>'+esc(p.assigned_rep)+'</span>'
+      : '<span class="who">'+ICON('user')+'Unassigned</span>';
+    if (!isManager()) return who;
+    var label = p.assigned_rep ? 'Reassign' : 'Assign';
+    return '<span class="assign-wrap" style="display:inline-flex;align-items:center;gap:10px">'+who
+      + '<button class="btn" onclick="event.stopPropagation();openAssign(\''+esc(p.po_id)+'\')">'+label+'</button></span>';
   }
 
-  function assignPO(poId, rep){
+  var ASSIGN_PO = null;
+  function openAssign(poId){
     var p = ALL.filter(function(x){return String(x.po_id)===String(poId);})[0];
     if (!p) return;
-    var prev = p.assigned_rep || '';
-    p.assigned_rep = rep;                 // optimistic
-    refreshViews();
-    fetch(API, { method:'POST', body: JSON.stringify({ action:'assign', po_id:poId, rep:rep, by:(ME&&ME.name)||'' }) })
+    ASSIGN_PO = poId;
+    var names = REPS.slice();
+    if (p.assigned_rep && names.map(norm).indexOf(norm(p.assigned_rep)) < 0) names.push(p.assigned_rep);
+    var repOpts = '<option value="">Unassigned</option>' + names.map(function(n){
+      return '<option value="'+esc(n)+'"'+(norm(n)===norm(p.assigned_rep)?' selected':'')+'>'+esc(n)+'</option>';
+    }).join('');
+    var cur = suggestedPriority(p); // high / mid / low
+    var segs = [['High','high'],['Mid','mid'],['Low','low']].map(function(o){
+      return '<button type="button" class="seg-b'+(cur===o[1]?' active':'')+'" data-v="'+o[1]+'" onclick="pickPrio(this)">'+o[0]+'</button>';
+    }).join('');
+    var dt = String(p.delivery_term||'').trim();
+    var caution = dt
+      ? '<div class="caution warn">⚠ This PO states a delivery period: <b>'+esc(dt)+'</b> — set priority accordingly.</div>'
+      : '<div class="caution none">No delivery period stated on this PO.</div>';
+    var html = '<div class="modal-bg" onclick="if(event.target===this)closeAssign()"><div class="modal">'
+      + '<h3>'+(p.assigned_rep?'Reassign order':'Assign order')+'</h3>'
+      + '<div class="msub">'+esc(p.title||p.customer_name||'')+' · '+esc(p.po_number)+'</div>'
+      + '<div class="fld"><label>Assign to</label><select id="amRep" class="assign">'+repOpts+'</select></div>'
+      + '<div class="fld"><label>Priority</label><div class="seg" id="amPrio">'+segs+'</div>'+caution+'</div>'
+      + '<div class="fld"><label>Guidance for the rep (optional)</label>'
+      +   '<textarea id="amNote" class="remark" placeholder="e.g. customer needs partial dispatch first; coordinate with vendor before packing">'+esc(p.manager_note||'')+'</textarea></div>'
+      + '<div class="modal-actions"><button class="btn" onclick="closeAssign()">Cancel</button>'
+      +   '<button class="btn go" onclick="saveAssign()">Save assignment</button></div>'
+      + '</div></div>';
+    document.getElementById('assignModal').innerHTML = html;
+  }
+  function pickPrio(btn){
+    var bs = btn.parentNode.querySelectorAll('.seg-b');
+    for (var i=0;i<bs.length;i++) bs[i].classList.remove('active');
+    btn.classList.add('active');
+  }
+  function closeAssign(){ document.getElementById('assignModal').innerHTML=''; ASSIGN_PO=null; }
+  function saveAssign(){
+    var poId = ASSIGN_PO; if (!poId) return;
+    var p = ALL.filter(function(x){return String(x.po_id)===String(poId);})[0]; if (!p) return;
+    var rep  = document.getElementById('amRep').value;
+    var act  = document.querySelector('#amPrio .seg-b.active');
+    var prio = act ? act.getAttribute('data-v') : '';
+    var note = (document.getElementById('amNote').value||'').trim();
+    var prev = { rep:p.assigned_rep||'', prio:p.priority||'', note:p.manager_note||'' };
+    p.assigned_rep = rep; p.priority = prio; p.manager_note = note;   // optimistic
+    closeAssign(); refreshViews();
+    fetch(API, { method:'POST', body: JSON.stringify({ action:'assign', po_id:poId, rep:rep, priority:prio, remark:note, by:(ME&&ME.name)||'' }) })
       .then(function(r){ return r.json(); })
       .then(function(res){
         if (res && res.ok){ toast(rep ? ('Assigned to '+rep) : 'Set to unassigned'); }
-        else { p.assigned_rep = prev; refreshViews(); toast((res&&res.error) || 'Could not assign'); }
+        else { p.assigned_rep=prev.rep; p.priority=prev.prio; p.manager_note=prev.note; refreshViews(); toast((res&&res.error)||'Could not save'); }
       })
-      .catch(function(){ p.assigned_rep = prev; refreshViews(); toast('Network error'); });
+      .catch(function(){ p.assigned_rep=prev.rep; p.priority=prev.prio; p.manager_note=prev.note; refreshViews(); toast('Network error'); });
   }
 
   function setStage(poId){
@@ -366,6 +473,219 @@
     }
   }
 
+  // ===================== TASKS =====================
+  function loadTasks(){
+    fetch(API + '?action=getTasks')
+      .then(function(r){ return r.json(); })
+      .then(function(rows){ TASKS = (rows && rows.length!==undefined) ? rows : []; renderTasks(); })
+      .catch(function(){ /* keep prior */ });
+  }
+  function prioPill(v){
+    var pr = norm(v)==='medium' ? 'mid' : norm(v);
+    if(pr==='high') return '<span class="pill p-high">High</span>';
+    if(pr==='low')  return '<span class="pill p-low">Low</span>';
+    if(pr==='mid')  return '<span class="pill p-mid">Mid</span>';
+    return '';
+  }
+  function taskActive(t){ var s=norm(t.status); return s!=='closed' && s!=='cancelled'; }
+  function taskOverdue(t){
+    if(!t.due_at || !taskActive(t)) return false;
+    var d=new Date(t.due_at); return !isNaN(d.getTime()) && d.getTime() < Date.now();
+  }
+  function taskTypeText(t){ return (norm(t.task_type)==='other' && t.type_other) ? t.type_other : (t.task_type||'Task'); }
+  function dueText(t){
+    if(!t.due_at) return '';
+    var d=new Date(t.due_at); if(isNaN(d.getTime())) return t.due_at;
+    return d.toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'});
+  }
+  function myTasks(){
+    var me=norm(ME&&ME.name);
+    return TASKS.filter(function(t){
+      if(!taskActive(t)) return false;
+      if(isManager()) return true;
+      return norm(t.assigned_to)===me || norm(t.created_by)===me;
+    });
+  }
+  function renderTasks(){
+    var el=document.getElementById('tasks'); if(!el) return;
+    var list=myTasks().sort(function(a,b){
+      var oa=taskOverdue(a)?0:1, ob=taskOverdue(b)?0:1; if(oa!==ob) return oa-ob;
+      var da=a.due_at?new Date(a.due_at).getTime():Infinity, db=b.due_at?new Date(b.due_at).getTime():Infinity;
+      return da-db;
+    });
+    var head='<div class="sec-h"><h2>Tasks</h2><button class="btn go" onclick="openTask()">+ New task</button></div>';
+    el.innerHTML='<div class="tasks-sec">'+head+(list.length
+      ? '<div class="task-grid">'+list.map(taskTile).join('')+'</div>'
+      : '<div class="empty">No open tasks.</div>')+'</div>';
+  }
+  function taskTile(t){
+    var me=norm(ME&&ME.name);
+    var od=taskOverdue(t);
+    var iAmAssignee = norm(t.assigned_to)===me;
+    var iCanClose = (norm(t.created_by)===me) || isManager();
+    var pend = norm(t.status)==='pending_acceptance';
+    var done = norm(t.status)==='done';
+    var a=[];
+    if(pend && iAmAssignee){
+      a.push('<button class="tbtn ok" onclick="acceptTask(\''+esc(t.task_id)+'\')">Accept</button>');
+      a.push('<button class="tbtn" onclick="declineTask(\''+esc(t.task_id)+'\')">Decline</button>');
+    } else if(!done && iAmAssignee){
+      a.push('<button class="tbtn ok" onclick="completeTask(\''+esc(t.task_id)+'\')">Mark done</button>');
+    }
+    if(done && iCanClose) a.push('<button class="tbtn ok" onclick="closeTask(\''+esc(t.task_id)+'\')">Close</button>');
+    if(od && iCanClose){
+      a.push('<button class="tbtn warn" onclick="openCarry(\''+esc(t.task_id)+'\')">Carry forward</button>');
+      a.push('<button class="tbtn" onclick="closeTask(\''+esc(t.task_id)+'\')">Close</button>');
+    }
+    var badge = pend ? '<span class="tstatus pend">Awaiting accept</span>'
+      : done ? '<span class="tstatus done">Done · awaiting close</span>'
+      : od ? '<span class="tstatus over">Overdue'+(t.carry_count?(' · carried '+t.carry_count+'×'):'')+'</span>'
+      : '<span class="tstatus open">Open</span>';
+    var comp = t.company_name ? '<div class="tmeta">'+ICON('user')+esc(t.company_name)+'</div>' : '';
+    var po   = t.linked_po_number ? '<div class="tmeta">'+ICON('file')+'PO '+esc(t.linked_po_number)+'</div>' : '';
+    var due  = t.due_at ? '<div class="tmeta'+(od?' overdue':'')+'">'+ICON('clock')+esc(dueText(t))+'</div>' : '';
+    var assignLine = '<div class="tassign">'+esc(t.assigned_to||'—')
+      + (norm(t.created_by)!==norm(t.assigned_to)?(' · by '+esc(t.created_by)):'')+'</div>';
+    return '<div class="task-tile'+(od?' od':'')+'">'
+      + '<div class="tt-top"><div class="tt-title">'+esc(t.title||taskTypeText(t))+'</div>'+prioPill(t.priority)+'</div>'
+      + '<div class="ttype">'+esc(taskTypeText(t))+'</div>'
+      + comp + po + due
+      + (t.instructions?'<div class="tinstr">'+esc(t.instructions)+'</div>':'')
+      + assignLine
+      + '<div class="tt-foot">'+badge+'<span class="tt-actions">'+a.join('')+'</span></div>'
+      + '</div>';
+  }
+
+  // ---- create / edit ----
+  function openTask(presetPoId){
+    var meName = ME && ME.name;
+    var people = USERS.length ? USERS : [{name:meName, role:(ME&&ME.role)}];
+    var assignOpts = people.filter(function(u){
+        return isManager() ? true : (norm(u.role)==='rep' || norm(u.name)===norm(meName));
+      }).map(function(u){
+        return '<option value="'+esc(u.name)+'"'+(norm(u.name)===norm(meName)?' selected':'')+'>'+esc(u.name)+(norm(u.name)===norm(meName)?' (me)':'')+'</option>';
+      }).join('');
+    var types=['Book Porter','Follow-up on Shipment','Source an Item','Confirm Address','Get Product Approved from User','Take Follow-up from Source','Other'];
+    var typeOpts=types.map(function(x){return '<option value="'+esc(x)+'">'+esc(x)+'</option>';}).join('');
+    var segs=[['High','high'],['Mid','mid'],['Low','low']].map(function(o){
+      return '<button type="button" class="seg-b'+(o[1]==='mid'?' active':'')+'" data-v="'+o[1]+'" onclick="pickPrio(this)">'+o[0]+'</button>';
+    }).join('');
+    var preset = presetPoId ? ALL.filter(function(p){return String(p.po_id)===String(presetPoId);})[0] : null;
+    LINKED_PO = preset ? {id:preset.po_id, number:preset.po_number} : null;
+    var chip = preset ? linkedPoChip(preset.po_number, preset.title||preset.customer_name) : '';
+    var html='<div class="modal-bg" onclick="if(event.target===this)closeTaskModal()"><div class="modal">'
+      +'<h3>New task</h3>'
+      +'<div class="fld"><label>Title</label><input id="tkTitle" class="inp" placeholder="Short summary, e.g. Book porter for Jindal PO"></div>'
+      +'<div class="fld"><label>Task type</label><select id="tkType" class="assign" onchange="taskTypeChange()">'+typeOpts+'</select></div>'
+      +'<div class="fld" id="tkOtherWrap" style="display:none"><label>Specify</label><input id="tkOther" class="inp"></div>'
+      +'<div class="fld"><label>Assign to</label><select id="tkAssignee" class="assign">'+assignOpts+'</select></div>'
+      +'<div class="fld"><label>Company (optional)</label><input id="tkCompany" class="inp"'+(preset?(' value="'+esc(preset.customer_name||'')+'"'):'')+'></div>'
+      +'<div class="fld"><label>Linked PO (optional)</label>'
+      +  '<input id="tkPoSearch" class="inp" placeholder="Search PO number, title or company" oninput="searchPo(this.value)" autocomplete="off">'
+      +  '<div id="tkPoResults" class="po-results"></div><div id="tkPoChip">'+chip+'</div></div>'
+      +'<div class="fld"><label>Due date &amp; time</label><input id="tkDue" class="inp" type="datetime-local"></div>'
+      +'<div class="fld"><label>Priority</label><div class="seg" id="tkPrio">'+segs+'</div></div>'
+      +'<div class="fld"><label>Instructions (optional)</label><textarea id="tkInstr" class="remark"></textarea></div>'
+      +'<div class="modal-actions"><button class="btn" onclick="closeTaskModal()">Cancel</button>'
+      +  '<button class="btn go" onclick="saveTask()">Create task</button></div>'
+      +'</div></div>';
+    document.getElementById('taskModal').innerHTML=html;
+  }
+  function taskTypeChange(){
+    var v=document.getElementById('tkType').value;
+    document.getElementById('tkOtherWrap').style.display = (norm(v)==='other')?'':'none';
+  }
+  function searchPo(q){
+    var box=document.getElementById('tkPoResults'); var n=norm(q);
+    if(!n){ box.innerHTML=''; return; }
+    var hits=ALL.filter(function(p){
+      return norm(p.po_number).indexOf(n)>-1 || norm(p.title).indexOf(n)>-1 || norm(p.customer_name).indexOf(n)>-1;
+    }).slice(0,6);
+    box.innerHTML = hits.length
+      ? hits.map(function(p){ return '<div class="po-hit" onclick="pickPo(\''+esc(p.po_id)+'\')"><b>'+esc(p.po_number)+'</b> · '+esc(p.title||p.customer_name)+'</div>'; }).join('')
+      : '<div class="po-hit muted">No match</div>';
+  }
+  function pickPo(poId){
+    var p=ALL.filter(function(x){return String(x.po_id)===String(poId);})[0]; if(!p) return;
+    LINKED_PO={id:p.po_id, number:p.po_number};
+    document.getElementById('tkPoResults').innerHTML='';
+    document.getElementById('tkPoSearch').value='';
+    document.getElementById('tkPoChip').innerHTML=linkedPoChip(p.po_number, p.title||p.customer_name);
+    var c=document.getElementById('tkCompany'); if(c && !c.value) c.value=p.customer_name||'';
+  }
+  function linkedPoChip(num,label){
+    return '<span class="po-chip">'+ICON('file')+esc(num)+' · '+esc(label||'')+' <button class="po-x" onclick="clearPo()">×</button></span>';
+  }
+  function clearPo(){ LINKED_PO=null; document.getElementById('tkPoChip').innerHTML=''; }
+  function closeTaskModal(){ document.getElementById('taskModal').innerHTML=''; LINKED_PO=null; }
+  function saveTask(){
+    var title=(val('tkTitle')).trim();
+    var type=val('tkType');
+    var other=(val('tkOther')).trim();
+    var assignee=val('tkAssignee');
+    var company=(val('tkCompany')).trim();
+    var due=val('tkDue');
+    var act=document.querySelector('#tkPrio .seg-b.active'); var prio=act?act.getAttribute('data-v'):'mid';
+    var instr=(val('tkInstr')).trim();
+    if(!title){ toast('Add a title'); return; }
+    if(!due){ toast('Set a due date & time'); return; }
+    if(new Date(due).getTime() < Date.now()-60000){ toast('Due time is in the past'); return; }
+    var payload={ action:'createTask', title:title, task_type:type, type_other:(norm(type)==='other'?other:''),
+      company_name:company, linked_po_id:(LINKED_PO?LINKED_PO.id:''), linked_po_number:(LINKED_PO?LINKED_PO.number:''),
+      due_at:due, priority:prio, instructions:instr, assigned_to:assignee, by:(ME&&ME.name)||'' };
+    closeTaskModal();
+    fetch(API,{method:"POST", body:JSON.stringify(payload)})
+      .then(function(r){return r.json();})
+      .then(function(res){ if(res&&res.ok){ toast("Task created"); loadTasks(); } else toast((res&&res.error)||'Could not create task'); })
+      .catch(function(){ toast('Network error'); });
+  }
+  function val(id){ var e=document.getElementById(id); return e ? (e.value||'') : ''; }
+
+  // ---- lifecycle actions ----
+  function taskAction_(action, taskId, extra, msg){
+    var payload={action:action, task_id:taskId, by:(ME&&ME.name)||''};
+    if(extra) for(var k in extra) payload[k]=extra[k];
+    fetch(API,{method:'POST', body:JSON.stringify(payload)})
+      .then(function(r){return r.json();})
+      .then(function(res){
+        if(res&&res.ok){ if(msg) toast(msg); loadTasks(); refreshDetailOpen(); }
+        else toast((res&&res.error)||'Action failed');
+      })
+      .catch(function(){ toast('Network error'); });
+  }
+  function acceptTask(id){ taskAction_('acceptTask', id, null, 'Accepted'); }
+  function completeTask(id){ taskAction_('completeTask', id, null, 'Marked done'); }
+  function closeTask(id){ taskAction_('closeTask', id, null, 'Task closed'); }
+  function declineTask(id){
+    var reason=prompt('Reason for declining (optional) — this goes back to the creator:')||'';
+    taskAction_('declineTask', id, {reason:reason}, 'Declined — sent back to creator');
+  }
+  function openCarry(id){
+    CARRY_TASK=id;
+    var t=TASKS.filter(function(x){return String(x.task_id)===String(id);})[0];
+    var html='<div class="modal-bg" onclick="if(event.target===this)closeCarry()"><div class="modal">'
+      +'<h3>Carry forward</h3><div class="msub">'+esc((t&&t.title)||'')+'</div>'
+      +'<div class="caution warn">Overdue'+((t&&t.carry_count)?(' · already carried '+t.carry_count+'×'):'')+'. Pick a fresh due date &amp; time.</div>'
+      +'<div class="fld"><label>New due date &amp; time</label><input id="cyDue" class="inp" type="datetime-local"></div>'
+      +'<div class="modal-actions"><button class="btn" onclick="closeCarry()">Cancel</button>'
+      +  '<button class="btn go" onclick="saveCarry()">Reschedule</button></div></div></div>';
+    document.getElementById('taskModal').innerHTML=html;
+  }
+  function closeCarry(){ document.getElementById('taskModal').innerHTML=''; CARRY_TASK=null; }
+  function saveCarry(){
+    var due=val('cyDue'); if(!due){ toast('Pick a new due date & time'); return; }
+    if(new Date(due).getTime() < Date.now()-60000){ toast('Pick a future time'); return; }
+    var id=CARRY_TASK; closeCarry();
+    taskAction_('carryTask', id, {due_at:due}, 'Rescheduled');
+  }
+  function refreshDetailOpen(){
+    var d=document.getElementById('detail');
+    if(d && d.style.display!=='none' && CURRENT_DETAIL){
+      var p=ALL.filter(function(x){return String(x.po_id)===String(CURRENT_DETAIL);})[0];
+      if(p) d.innerHTML=detailHtml(p);
+    }
+  }
+
   function load(){
     document.getElementById('list').innerHTML='<div class="state"><div class="spin"></div>Loading orders…</div>';
     fetch(API + '?action=getPOs')
@@ -383,7 +703,7 @@
     document.getElementById('attention').style.display = mgr ? '' : 'none';
     document.querySelector('#boardhead h1').textContent = mgr ? 'All orders' : 'My orders';
     if (mgr){ renderPulse(); renderAttention(); }
-    renderChips(); render();
+    renderChips(); render(); renderTasks();
   }
 
   // ---- date / ageing ----
@@ -439,10 +759,11 @@
   }
   // ---- processing stage ----
   var STAGES = [
-    {v:'',           l:'Open'},
-    {v:'At source',  l:'At source'},
-    {v:'Processing', l:'Processing / packing'},
-    {v:'Ready',      l:'Packed — ready for dispatch'}
+    {v:'',            l:'Open'},
+    {v:'Procurement', l:'Procurement'},
+    {v:'At source',   l:'At source'},
+    {v:'Processing',  l:'Processing / packing'},
+    {v:'Ready',       l:'Packed — ready for dispatch'}
   ];
   function stageLabel(v){
     for(var i=0;i<STAGES.length;i++){ if(norm(STAGES[i].v)===norm(v)) return STAGES[i].l; }
@@ -480,7 +801,7 @@
       +   (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +   ageTxt
       + '</div>'
-      + '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+'</div>'
+      + '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+(norm(p.manager_note)?'<span class="pill p-note">Note</span>':'')+'</div>'
       + '<div class="foot">'+who+'<div class="links">'+poCopy+'<button class="btn go" onclick="openDetail(\''+esc(p.po_id)+'\')">View details →</button></div></div>'
       + '</div>';
   }
@@ -615,6 +936,7 @@
       +   '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+'</div>'
       +   '<div class="foot">'+who+'<div class="links">'+poCopy+'</div></div>'
       + '</div>'
+      + (norm(p.manager_note) ? '<div class="mgr-note"><b>Manager\u2019s note</b><span>'+esc(p.manager_note)+'</span></div>' : '')
       + '<div class="sec"><div class="sec-h"><h2>Processing stage</h2></div>'
       +   '<div class="stage-edit">'
       +     '<select id="stageSel" class="assign">'
@@ -626,6 +948,11 @@
       + '</div>'
       + '<div class="sec"><div class="sec-h"><h2>Items</h2><span class="c">'+items.length+'</span></div>'
       +   (items.length ? '<div class="items">'+itemRows+'</div>' : '<div class="empty">No line items captured.</div>')
+      + '</div>'
+      + '<div class="sec"><div class="sec-h"><h2>Related tasks</h2>'
+      +   '<button class="btn" onclick="openTask(\''+esc(p.po_id)+'\')">+ Task</button></div>'
+      +   (function(){ var rel=TASKS.filter(function(t){return String(t.linked_po_id)===String(p.po_id) && norm(t.status)!=='cancelled';});
+            return rel.length ? '<div class="task-grid">'+rel.map(taskTile).join('')+'</div>' : '<div class="empty">No tasks linked to this PO.</div>'; })()
       + '</div>'
       + '<div class="sec"><div class="sec-h"><h2>Invoices</h2></div><div class="empty">No invoices linked yet.</div></div>'
       + '<div class="sec"><div class="sec-h"><h2>Quotation</h2></div><div class="empty">Quotation link — coming later.</div></div>';
