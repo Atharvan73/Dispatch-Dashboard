@@ -16,6 +16,8 @@
   v1.5  Tasks: create/assign tasks (manager→anyone, rep→self or teammate with accept/
         decline), link to a PO via search, due date/time, priority, types incl. Other;
         overdue carry-forward/close for creator/manager; tasks shown on board + PO detail.
+  v1.6  Tasks below the pulse; dashboard shows only today/overdue/pending tasks;
+        creator or manager can edit and delete a task.
 -->
 <html>
 <head>
@@ -235,6 +237,9 @@
   .tbtn:hover{border-color:var(--ink)}
   .tbtn.ok{background:var(--accent);border-color:var(--accent);color:#fff}
   .tbtn.warn{border-color:#d9a900;color:#8a6d00}
+  .tbtn.danger{color:var(--danger)}
+  .tbtn.danger:hover{border-color:var(--danger)}
+  .more-note{font-size:12px;color:var(--faint);margin-top:10px}
   .inp{font:inherit;font-size:13px;width:100%;box-sizing:border-box;padding:9px 10px;
     border:1px solid var(--line2);border-radius:9px;background:var(--bg);color:var(--ink)}
   .inp:focus{outline:none;border-color:var(--accent)}
@@ -275,8 +280,8 @@
   </div>
 
   <div class="wrap" id="board">
-    <div id="tasks"></div>
     <div class="pulse" id="pulse"></div>
+    <div id="tasks"></div>
     <div id="attention"></div>
     <div class="head" id="boardhead">
       <h1>All orders</h1>
@@ -296,7 +301,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v1.5';
+  var VERSION = 'v1.6';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -364,6 +369,7 @@
   var TASKS = [];
   var LINKED_PO = null;
   var CARRY_TASK = null;
+  var TASK_EDIT = null;
   function enterApp(){
     var ub = document.getElementById('userbtn');
     ub.style.display = ''; ub.textContent = ME.name + ' · Sign out';
@@ -510,15 +516,33 @@
   }
   function renderTasks(){
     var el=document.getElementById('tasks'); if(!el) return;
-    var list=myTasks().sort(function(a,b){
+    var mine=myTasks();
+    var meName=norm(ME&&ME.name);
+    var urgent=mine.filter(function(t){
+      return taskOverdue(t) || dueToday(t) || (norm(t.status)==='pending_acceptance' && norm(t.assigned_to)===meName);
+    }).sort(function(a,b){
       var oa=taskOverdue(a)?0:1, ob=taskOverdue(b)?0:1; if(oa!==ob) return oa-ob;
       var da=a.due_at?new Date(a.due_at).getTime():Infinity, db=b.due_at?new Date(b.due_at).getTime():Infinity;
       return da-db;
     });
-    var head='<div class="sec-h"><h2>Tasks</h2><button class="btn go" onclick="openTask()">+ New task</button></div>';
-    el.innerHTML='<div class="tasks-sec">'+head+(list.length
-      ? '<div class="task-grid">'+list.map(taskTile).join('')+'</div>'
-      : '<div class="empty">No open tasks.</div>')+'</div>';
+    var head='<div class="sec-h"><h2>Tasks · needs action</h2><button class="btn go" onclick="openTask()">+ New task</button></div>';
+    if(!urgent.length){
+      el.innerHTML='<div class="tasks-sec">'+head+'<div class="empty">Nothing due today.'
+        +(mine.length?(' '+mine.length+' open task'+(mine.length===1?'':'s')+' total.'):'')+'</div></div>';
+      return;
+    }
+    var show=urgent.slice(0,6);
+    var more=mine.length-show.length;
+    el.innerHTML='<div class="tasks-sec">'+head
+      +'<div class="task-grid">'+show.map(taskTile).join('')+'</div>'
+      +(more>0?'<div class="more-note">+ '+more+' more open task'+(more===1?'':'s')+' — full list on the Tasks page (coming next)</div>':'')
+      +'</div>';
+  }
+  function dueToday(t){
+    if(!t.due_at||!taskActive(t)) return false;
+    var d=new Date(t.due_at); if(isNaN(d.getTime())) return false;
+    var n=new Date();
+    return d.getFullYear()===n.getFullYear() && d.getMonth()===n.getMonth() && d.getDate()===n.getDate();
   }
   function taskTile(t){
     var me=norm(ME&&ME.name);
@@ -538,6 +562,10 @@
     if(od && iCanClose){
       a.push('<button class="tbtn warn" onclick="openCarry(\''+esc(t.task_id)+'\')">Carry forward</button>');
       a.push('<button class="tbtn" onclick="closeTask(\''+esc(t.task_id)+'\')">Close</button>');
+    }
+    if(iCanClose){
+      a.push('<button class="tbtn" onclick="editTaskOpen(\''+esc(t.task_id)+'\')">Edit</button>');
+      a.push('<button class="tbtn danger" onclick="deleteTask(\''+esc(t.task_id)+'\')">Delete</button>');
     }
     var badge = pend ? '<span class="tstatus pend">Awaiting accept</span>'
       : done ? '<span class="tstatus done">Done · awaiting close</span>'
@@ -559,39 +587,57 @@
   }
 
   // ---- create / edit ----
-  function openTask(presetPoId){
+  function openTask(presetPoId, editT){
+    var ed = editT || null;
+    TASK_EDIT = ed ? ed.task_id : null;
     var meName = ME && ME.name;
     var people = USERS.length ? USERS : [{name:meName, role:(ME&&ME.role)}];
+    var selAssignee = ed ? ed.assigned_to : meName;
     var assignOpts = people.filter(function(u){
         return isManager() ? true : (norm(u.role)==='rep' || norm(u.name)===norm(meName));
       }).map(function(u){
-        return '<option value="'+esc(u.name)+'"'+(norm(u.name)===norm(meName)?' selected':'')+'>'+esc(u.name)+(norm(u.name)===norm(meName)?' (me)':'')+'</option>';
+        return '<option value="'+esc(u.name)+'"'+(norm(u.name)===norm(selAssignee)?' selected':'')+'>'+esc(u.name)+(norm(u.name)===norm(meName)?' (me)':'')+'</option>';
       }).join('');
     var types=['Book Porter','Follow-up on Shipment','Source an Item','Confirm Address','Get Product Approved from User','Take Follow-up from Source','Other'];
-    var typeOpts=types.map(function(x){return '<option value="'+esc(x)+'">'+esc(x)+'</option>';}).join('');
+    var selType = ed ? ed.task_type : '';
+    var typeOpts=types.map(function(x){return '<option value="'+esc(x)+'"'+(norm(x)===norm(selType)?' selected':'')+'>'+esc(x)+'</option>';}).join('');
+    var selPrio = ed ? (norm(ed.priority)==='medium'?'mid':(norm(ed.priority)||'mid')) : 'mid';
     var segs=[['High','high'],['Mid','mid'],['Low','low']].map(function(o){
-      return '<button type="button" class="seg-b'+(o[1]==='mid'?' active':'')+'" data-v="'+o[1]+'" onclick="pickPrio(this)">'+o[0]+'</button>';
+      return '<button type="button" class="seg-b'+(selPrio===o[1]?' active':'')+'" data-v="'+o[1]+'" onclick="pickPrio(this)">'+o[0]+'</button>';
     }).join('');
-    var preset = presetPoId ? ALL.filter(function(p){return String(p.po_id)===String(presetPoId);})[0] : null;
-    LINKED_PO = preset ? {id:preset.po_id, number:preset.po_number} : null;
-    var chip = preset ? linkedPoChip(preset.po_number, preset.title||preset.customer_name) : '';
+    var preset = (!ed && presetPoId) ? ALL.filter(function(p){return String(p.po_id)===String(presetPoId);})[0] : null;
+    if(ed && ed.linked_po_id){ LINKED_PO={id:ed.linked_po_id, number:ed.linked_po_number}; }
+    else { LINKED_PO = preset ? {id:preset.po_id, number:preset.po_number} : null; }
+    var chip = LINKED_PO ? linkedPoChip(LINKED_PO.number, preset?(preset.title||preset.customer_name):'') : '';
+    var otherShown = norm(selType)==='other';
+    var dueVal = ed && ed.due_at ? ed.due_at : '';
+    var compVal = ed ? (ed.company_name||'') : (preset?(preset.customer_name||''):'');
     var html='<div class="modal-bg" onclick="if(event.target===this)closeTaskModal()"><div class="modal">'
-      +'<h3>New task</h3>'
-      +'<div class="fld"><label>Title</label><input id="tkTitle" class="inp" placeholder="Short summary, e.g. Book porter for Jindal PO"></div>'
+      +'<h3>'+(ed?'Edit task':'New task')+'</h3>'
+      +'<div class="fld"><label>Title</label><input id="tkTitle" class="inp" placeholder="Short summary, e.g. Book porter for Jindal PO" value="'+esc(ed?ed.title:'')+'"></div>'
       +'<div class="fld"><label>Task type</label><select id="tkType" class="assign" onchange="taskTypeChange()">'+typeOpts+'</select></div>'
-      +'<div class="fld" id="tkOtherWrap" style="display:none"><label>Specify</label><input id="tkOther" class="inp"></div>'
+      +'<div class="fld" id="tkOtherWrap" style="display:'+(otherShown?'':'none')+'"><label>Specify</label><input id="tkOther" class="inp" value="'+esc(ed?(ed.type_other||''):'')+'"></div>'
       +'<div class="fld"><label>Assign to</label><select id="tkAssignee" class="assign">'+assignOpts+'</select></div>'
-      +'<div class="fld"><label>Company (optional)</label><input id="tkCompany" class="inp"'+(preset?(' value="'+esc(preset.customer_name||'')+'"'):'')+'></div>'
+      +'<div class="fld"><label>Company (optional)</label><input id="tkCompany" class="inp" value="'+esc(compVal)+'"></div>'
       +'<div class="fld"><label>Linked PO (optional)</label>'
       +  '<input id="tkPoSearch" class="inp" placeholder="Search PO number, title or company" oninput="searchPo(this.value)" autocomplete="off">'
       +  '<div id="tkPoResults" class="po-results"></div><div id="tkPoChip">'+chip+'</div></div>'
-      +'<div class="fld"><label>Due date &amp; time</label><input id="tkDue" class="inp" type="datetime-local"></div>'
+      +'<div class="fld"><label>Due date &amp; time</label><input id="tkDue" class="inp" type="datetime-local" value="'+esc(dueVal)+'"></div>'
       +'<div class="fld"><label>Priority</label><div class="seg" id="tkPrio">'+segs+'</div></div>'
-      +'<div class="fld"><label>Instructions (optional)</label><textarea id="tkInstr" class="remark"></textarea></div>'
+      +'<div class="fld"><label>Instructions (optional)</label><textarea id="tkInstr" class="remark">'+esc(ed?(ed.instructions||''):'')+'</textarea></div>'
       +'<div class="modal-actions"><button class="btn" onclick="closeTaskModal()">Cancel</button>'
-      +  '<button class="btn go" onclick="saveTask()">Create task</button></div>'
+      +  '<button class="btn go" onclick="saveTask()">'+(ed?'Save changes':'Create task')+'</button></div>'
       +'</div></div>';
     document.getElementById('taskModal').innerHTML=html;
+  }
+  function editTaskOpen(id){
+    var t=TASKS.filter(function(x){return String(x.task_id)===String(id);})[0];
+    if(!t){ toast('Task not found'); return; }
+    openTask(null, t);
+  }
+  function deleteTask(id){
+    if(!confirm('Delete this task? This cannot be undone.')) return;
+    taskAction_('deleteTask', id, null, 'Task deleted');
   }
   function taskTypeChange(){
     var v=document.getElementById('tkType').value;
@@ -619,7 +665,7 @@
     return '<span class="po-chip">'+ICON('file')+esc(num)+' · '+esc(label||'')+' <button class="po-x" onclick="clearPo()">×</button></span>';
   }
   function clearPo(){ LINKED_PO=null; document.getElementById('tkPoChip').innerHTML=''; }
-  function closeTaskModal(){ document.getElementById('taskModal').innerHTML=''; LINKED_PO=null; }
+  function closeTaskModal(){ document.getElementById('taskModal').innerHTML=''; LINKED_PO=null; TASK_EDIT=null; }
   function saveTask(){
     var title=(val('tkTitle')).trim();
     var type=val('tkType');
@@ -631,14 +677,17 @@
     var instr=(val('tkInstr')).trim();
     if(!title){ toast('Add a title'); return; }
     if(!due){ toast('Set a due date & time'); return; }
-    if(new Date(due).getTime() < Date.now()-60000){ toast('Due time is in the past'); return; }
-    var payload={ action:'createTask', title:title, task_type:type, type_other:(norm(type)==='other'?other:''),
+    if(!TASK_EDIT && new Date(due).getTime() < Date.now()-60000){ toast('Due time is in the past'); return; }
+    var editing=TASK_EDIT;
+    var payload={ action:(editing?'editTask':'createTask'),
+      title:title, task_type:type, type_other:(norm(type)==='other'?other:''),
       company_name:company, linked_po_id:(LINKED_PO?LINKED_PO.id:''), linked_po_number:(LINKED_PO?LINKED_PO.number:''),
       due_at:due, priority:prio, instructions:instr, assigned_to:assignee, by:(ME&&ME.name)||'' };
+    if(editing) payload.task_id=editing;
     closeTaskModal();
-    fetch(API,{method:"POST", body:JSON.stringify(payload)})
+    fetch(API,{method:'POST', body:JSON.stringify(payload)})
       .then(function(r){return r.json();})
-      .then(function(res){ if(res&&res.ok){ toast("Task created"); loadTasks(); } else toast((res&&res.error)||'Could not create task'); })
+      .then(function(res){ if(res&&res.ok){ toast(editing?'Task updated':'Task created'); loadTasks(); refreshDetailOpen(); } else toast((res&&res.error)||'Could not save task'); })
       .catch(function(){ toast('Network error'); });
   }
   function val(id){ var e=document.getElementById(id); return e ? (e.value||'') : ''; }
