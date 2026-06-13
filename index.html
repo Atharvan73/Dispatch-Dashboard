@@ -20,6 +20,8 @@
         creator or manager can edit and delete a task.
   v1.7  Archive cutoff: POs before 5 Jun 2026 hidden from board/pulse/attention but
         kept and findable via a PO search (search includes archived).
+  v1.8  Manager can filter the board by rep (All reps / Unassigned / each rep);
+        list, chips and count follow the selection.
 -->
 <html>
 <head>
@@ -111,6 +113,8 @@
   .s-stage{background:var(--slate-soft);color:var(--slate)}
   .s-arch{background:var(--neutral-soft);color:var(--faint)}
   .searchbar{margin:0 0 16px}
+  .head-right{display:flex;align-items:center;gap:14px}
+  .head-right .assign{max-width:180px}
   .overdue{color:var(--danger)!important;font-weight:500}
 
   .stage-edit{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;
@@ -289,7 +293,7 @@
     <div id="attention"></div>
     <div class="head" id="boardhead">
       <h1>All orders</h1>
-      <span class="count" id="count"></span>
+      <div class="head-right"><span id="repFilterWrap"></span><span class="count" id="count"></span></div>
     </div>
     <div class="chips" id="chips"></div>
     <div class="searchbar"><input id="poSearch" class="inp" placeholder="Search any PO — number, title or company (includes archived)" oninput="setQuery(this.value)"></div>
@@ -306,13 +310,14 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v1.7';
+  var VERSION = 'v1.8';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
   var ALL = [];
   var FILTER = 'all';
   var QUERY = '';
+  var REP_FILTER = ''; // manager: '' = all, '__unassigned__', or a rep name
   var CUTOFF = new Date(2026, 5, 5); // 5 Jun 2026 — POs dated before this are archived
   function isArchived(p){ var d = parseDate(p.po_date); return !!d && d < CUTOFF; }
   var FILTERS = [
@@ -392,7 +397,11 @@
   }
   function isManager(){ return ME && norm(ME.role) === 'manager'; }
   function scopedRows(){
-    if (isManager()) return ALL;
+    if (isManager()){
+      if(!REP_FILTER) return ALL;
+      if(REP_FILTER==='__unassigned__') return ALL.filter(function(p){return !p.assigned_rep;});
+      return ALL.filter(function(p){ return norm(p.assigned_rep)===norm(REP_FILTER); });
+    }
     return ALL.filter(function(p){ return norm(p.assigned_rep) === norm(ME && ME.name); });
   }
 
@@ -761,7 +770,7 @@
     document.getElementById('pulse').style.display = mgr ? '' : 'none';
     document.getElementById('attention').style.display = mgr ? '' : 'none';
     document.querySelector('#boardhead h1').textContent = mgr ? 'All orders' : 'My orders';
-    if (mgr){ renderPulse(); renderAttention(); }
+    if (mgr){ renderPulse(); renderAttention(); renderRepFilter(); }
     renderChips(); render(); renderTasks();
   }
 
@@ -942,6 +951,15 @@
       + '<span class="c">'+rows.length+'</span></div>'
       + '<div class="attn-list">'+list+'</div>'+more+'</div>';
   }
+
+  function renderRepFilter(){
+    var el=document.getElementById('repFilterWrap'); if(!el) return;
+    if(!isManager()){ el.innerHTML=''; return; }
+    var opts='<option value="">All reps</option><option value="__unassigned__"'+(REP_FILTER==='__unassigned__'?' selected':'')+'>Unassigned</option>'
+      + REPS.map(function(n){return '<option value="'+esc(n)+'"'+(norm(n)===norm(REP_FILTER)?' selected':'')+'>'+esc(n)+'</option>';}).join('');
+    el.innerHTML='<select class="assign" onchange="setRepFilter(this.value)">'+opts+'</select>';
+  }
+  function setRepFilter(v){ REP_FILTER=v; renderChips(); render(); }
 
   function setQuery(v){ QUERY=v; render(); }
   function setFilter(k){
