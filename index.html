@@ -22,6 +22,10 @@
         kept and findable via a PO search (search includes archived).
   v1.8  Manager can filter the board by rep (All reps / Unassigned / each rep);
         list, chips and count follow the selection.
+  v1.9  Top navigation (Orders / My Daily Work / Tasks). Tasks page with status
+        filters; My Daily Work shows the user's tasks + assigned orders.
+  v2.0  GeM / IREPS orders included, with a firm tag (Shakti / Universal) and a
+        firm filter; channel pill (GeM / IREPS) on each order.
 -->
 <html>
 <head>
@@ -115,6 +119,11 @@
   .searchbar{margin:0 0 16px}
   .head-right{display:flex;align-items:center;gap:14px}
   .head-right .assign{max-width:180px}
+  .nav{max-width:760px;margin:0 auto;padding:14px 20px 0;display:flex;gap:6px}
+  .navtab{font:inherit;font-size:13px;font-weight:500;padding:7px 14px;border-radius:9px;border:1px solid transparent;
+    background:none;color:var(--muted);cursor:pointer}
+  .navtab:hover{color:var(--ink)}
+  .navtab.on{background:var(--surface);border-color:var(--line);color:var(--ink)}
   .overdue{color:var(--danger)!important;font-weight:500}
 
   .stage-edit{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;
@@ -147,6 +156,9 @@
   .mgr-note b{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--warn);margin-bottom:4px}
   .mgr-note span{font-size:13.5px;color:var(--ink);white-space:pre-wrap}
   .p-note{background:var(--warn-soft);color:var(--warn)}
+  .p-firmS{background:#eef2f1;color:#33524c;border:1px solid #d3e0dc}
+  .p-firmU{background:#efe9fb;color:#5a3ea8;border:1px solid #ddd0f4}
+  .p-ch{background:#fff2e2;color:#9a571a;border:1px solid #f2d9bb}
 
   /* detail view */
   .back{display:inline-flex;align-items:center;gap:6px;font:inherit;font-size:13px;color:var(--muted);
@@ -287,6 +299,8 @@
     </div>
   </div>
 
+  <div class="nav" id="nav"></div>
+
   <div class="wrap" id="board">
     <div class="pulse" id="pulse"></div>
     <div id="tasks"></div>
@@ -303,6 +317,8 @@
   </div>
 
   <div class="wrap" id="detail" style="display:none"></div>
+  <div class="wrap" id="dailyPage" style="display:none"></div>
+  <div class="wrap" id="tasksPage" style="display:none"></div>
 
   <div class="toast" id="toast"></div>
 
@@ -310,7 +326,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v1.8';
+  var VERSION = 'v2.0';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -318,6 +334,8 @@
   var FILTER = 'all';
   var QUERY = '';
   var REP_FILTER = ''; // manager: '' = all, '__unassigned__', or a rep name
+  var FIRM_FILTER = ''; // manager: '' = all firms, 'Shakti', or 'Universal'
+  function firmOf(p){ return norm(p.firm)==='universal' ? 'Universal' : 'Shakti'; }
   var CUTOFF = new Date(2026, 5, 5); // 5 Jun 2026 — POs dated before this are archived
   function isArchived(p){ var d = parseDate(p.po_date); return !!d && d < CUTOFF; }
   var FILTERS = [
@@ -397,12 +415,16 @@
   }
   function isManager(){ return ME && norm(ME.role) === 'manager'; }
   function scopedRows(){
+    var base;
     if (isManager()){
-      if(!REP_FILTER) return ALL;
-      if(REP_FILTER==='__unassigned__') return ALL.filter(function(p){return !p.assigned_rep;});
-      return ALL.filter(function(p){ return norm(p.assigned_rep)===norm(REP_FILTER); });
+      if(!REP_FILTER) base = ALL;
+      else if(REP_FILTER==='__unassigned__') base = ALL.filter(function(p){return !p.assigned_rep;});
+      else base = ALL.filter(function(p){ return norm(p.assigned_rep)===norm(REP_FILTER); });
+    } else {
+      base = ALL.filter(function(p){ return norm(p.assigned_rep) === norm(ME && ME.name); });
     }
-    return ALL.filter(function(p){ return norm(p.assigned_rep) === norm(ME && ME.name); });
+    if (FIRM_FILTER) base = base.filter(function(p){ return firmOf(p)===FIRM_FILTER; });
+    return base;
   }
 
   // Assignee cell: static for reps; assignee + Assign/Reassign button for the manager.
@@ -502,7 +524,7 @@
   function loadTasks(){
     fetch(API + '?action=getTasks')
       .then(function(r){ return r.json(); })
-      .then(function(rows){ TASKS = (rows && rows.length!==undefined) ? rows : []; renderTasks(); })
+      .then(function(rows){ TASKS = (rows && rows.length!==undefined) ? rows : []; renderTasks(); if(VIEW==='tasks') renderTasksPage(); if(VIEW==='daily') renderDaily(); })
       .catch(function(){ /* keep prior */ });
   }
   function prioPill(v){
@@ -552,7 +574,7 @@
     var more=mine.length-show.length;
     el.innerHTML='<div class="tasks-sec">'+head
       +'<div class="task-grid">'+show.map(taskTile).join('')+'</div>'
-      +(more>0?'<div class="more-note">+ '+more+' more open task'+(more===1?'':'s')+' — full list on the Tasks page (coming next)</div>':'')
+      +(more>0?'<div class="more-note" style="cursor:pointer" onclick="showView(\'tasks\')">+ '+more+' more open task'+(more===1?'':'s')+' — view all on the Tasks page →</div>':'')
       +'</div>';
   }
   function dueToday(t){
@@ -771,7 +793,7 @@
     document.getElementById('attention').style.display = mgr ? '' : 'none';
     document.querySelector('#boardhead h1').textContent = mgr ? 'All orders' : 'My orders';
     if (mgr){ renderPulse(); renderAttention(); renderRepFilter(); }
-    renderChips(); render(); renderTasks();
+    renderChips(); render(); renderTasks(); renderNav();
   }
 
   // ---- date / ageing ----
@@ -847,6 +869,14 @@
     return (parts[0][0]+(parts.length>1?parts[parts.length-1][0]:'')).toUpperCase();
   }
 
+  function firmPill(p){
+    var firm = firmOf(p);
+    var ch = norm(p.source);
+    var chTxt = ch==='gem' ? 'GeM' : (ch==='ireps' ? 'IREPS' : '');
+    return '<span class="pill '+(firm==='Universal'?'p-firmU':'p-firmS')+'">'+firm+'</span>'
+         + (chTxt ? '<span class="pill p-ch">'+chTxt+'</span>' : '');
+  }
+
   function tile(p){
     var age=ageDays(p), over=isOverdue(p), isNew=(age!=null && age<=2);
     var items=p.item_count||0;
@@ -869,7 +899,7 @@
       +   (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +   ageTxt
       + '</div>'
-      + '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+(norm(p.manager_note)?'<span class="pill p-note">Note</span>':'')+(isArchived(p)?'<span class="pill s-arch">Archived</span>':'')+'</div>'
+      + '<div class="status">'+firmPill(p)+stagePill(p)+dispatchPill(p)+deliveryPill(p)+(norm(p.manager_note)?'<span class="pill p-note">Note</span>':'')+(isArchived(p)?'<span class="pill s-arch">Archived</span>':'')+'</div>'
       + '<div class="foot">'+who+'<div class="links">'+poCopy+'<button class="btn go" onclick="openDetail(\''+esc(p.po_id)+'\')">View details →</button></div></div>'
       + '</div>';
   }
@@ -955,11 +985,16 @@
   function renderRepFilter(){
     var el=document.getElementById('repFilterWrap'); if(!el) return;
     if(!isManager()){ el.innerHTML=''; return; }
-    var opts='<option value="">All reps</option><option value="__unassigned__"'+(REP_FILTER==='__unassigned__'?' selected':'')+'>Unassigned</option>'
+    var repOpts='<option value="">All reps</option><option value="__unassigned__"'+(REP_FILTER==='__unassigned__'?' selected':'')+'>Unassigned</option>'
       + REPS.map(function(n){return '<option value="'+esc(n)+'"'+(norm(n)===norm(REP_FILTER)?' selected':'')+'>'+esc(n)+'</option>';}).join('');
-    el.innerHTML='<select class="assign" onchange="setRepFilter(this.value)">'+opts+'</select>';
+    var firmOpts=['','Shakti','Universal'].map(function(f){
+      return '<option value="'+f+'"'+(FIRM_FILTER===f?' selected':'')+'>'+(f||'All firms')+'</option>';
+    }).join('');
+    el.innerHTML='<select class="assign" onchange="setRepFilter(this.value)">'+repOpts+'</select>'
+               +'<select class="assign" style="margin-left:8px" onchange="setFirmFilter(this.value)">'+firmOpts+'</select>';
   }
   function setRepFilter(v){ REP_FILTER=v; renderChips(); render(); }
+  function setFirmFilter(v){ FIRM_FILTER=v; renderChips(); render(); }
 
   function setQuery(v){ QUERY=v; render(); }
   function setFilter(k){
@@ -977,11 +1012,34 @@
   }
 
   var CURRENT_DETAIL = null;
+  var VIEW = 'orders';
+  function renderNav(){
+    var el=document.getElementById('nav'); if(!el) return;
+    var tabs = isManager()
+      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks']]
+      : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks']];
+    el.innerHTML = tabs.map(function(t){
+      return '<button class="navtab'+(VIEW===t[0]?' on':'')+'" onclick="showView(\''+t[0]+'\')">'+t[1]+'</button>';
+    }).join('');
+  }
+  function showView(v){
+    VIEW=v; CURRENT_DETAIL=null;
+    document.getElementById('detail').style.display='none';
+    document.getElementById('board').style.display     = (v==='orders')?'':'none';
+    document.getElementById('dailyPage').style.display = (v==='daily') ?'':'none';
+    document.getElementById('tasksPage').style.display = (v==='tasks') ?'':'none';
+    if(v==='daily') renderDaily();
+    if(v==='tasks') renderTasksPage();
+    renderNav();
+    window.scrollTo(0,0);
+  }
   function openDetail(id){
     var p = ALL.filter(function(x){return String(x.po_id)===String(id);})[0];
     if(!p){ toast('Order not found.'); return; }
     CURRENT_DETAIL = id;
     document.getElementById('board').style.display='none';
+    document.getElementById('dailyPage').style.display='none';
+    document.getElementById('tasksPage').style.display='none';
     var d=document.getElementById('detail');
     d.innerHTML = detailHtml(p);
     d.style.display='';
@@ -990,8 +1048,58 @@
   function closeDetail(){
     CURRENT_DETAIL = null;
     document.getElementById('detail').style.display='none';
-    document.getElementById('board').style.display='';
+    showView(VIEW);
   }
+
+  // ---- Tasks page ----
+  var TASK_FILTER = 'active';
+  function visibleTasks(){
+    var me=norm(ME&&ME.name);
+    return TASKS.filter(function(t){ return isManager() || norm(t.assigned_to)===me || norm(t.created_by)===me; });
+  }
+  function renderTasksPage(){
+    var el=document.getElementById('tasksPage'); if(!el) return;
+    var all=visibleTasks();
+    var filters=[
+      ['active','Active', function(t){return taskActive(t);}],
+      ['pending','Awaiting accept', function(t){return norm(t.status)==='pending_acceptance';}],
+      ['overdue','Overdue', function(t){return taskOverdue(t);}],
+      ['done','Done', function(t){return norm(t.status)==='done';}],
+      ['closed','Closed', function(t){return norm(t.status)==='closed';}],
+      ['all','All', function(){return true;}]
+    ];
+    var f=filters.filter(function(x){return x[0]===TASK_FILTER;})[0]||filters[0];
+    var rows=all.filter(f[2]).sort(function(a,b){
+      var da=a.due_at?new Date(a.due_at).getTime():Infinity, db=b.due_at?new Date(b.due_at).getTime():Infinity;
+      return da-db;
+    });
+    var chips=filters.map(function(x){
+      var n=all.filter(x[2]).length;
+      return '<button class="chip'+(x[0]===TASK_FILTER?' on':'')+'" onclick="setTaskFilter(\''+x[0]+'\')">'+x[1]+' <span class="n">'+n+'</span></button>';
+    }).join('');
+    el.innerHTML='<div class="head"><h1>Tasks</h1><span class="count">'+rows.length+' task'+(rows.length===1?'':'s')+'</span></div>'
+      +'<div class="chips">'+chips+'</div>'
+      +'<div style="margin:6px 0 16px"><button class="btn go" onclick="openTask()">+ New task</button></div>'
+      +(rows.length? '<div class="task-grid">'+rows.map(taskTile).join('')+'</div>' : '<div class="empty">No tasks here.</div>');
+  }
+  function setTaskFilter(k){ TASK_FILTER=k; renderTasksPage(); }
+
+  // ---- My Daily Work ----
+  function renderDaily(){
+    var el=document.getElementById('dailyPage'); if(!el) return;
+    var me=norm(ME&&ME.name);
+    var myT=TASKS.filter(function(t){ return taskActive(t) && norm(t.assigned_to)===me; })
+      .sort(function(a,b){ var da=a.due_at?new Date(a.due_at).getTime():Infinity, db=b.due_at?new Date(b.due_at).getTime():Infinity; return da-db; });
+    var myPO=ALL.filter(function(p){ return !isArchived(p) && norm(p.assigned_rep)===me; }).sort(byDateDesc);
+    var html='<div class="head"><h1>My Daily Work</h1><span class="count">'+todayStr()+'</span></div>';
+    html+='<div class="sec"><div class="sec-h"><h2>My tasks</h2><span class="c">'+myT.length+'</span>'
+      +'<button class="btn go" style="margin-left:auto" onclick="openTask()">+ New task</button></div>'
+      +(myT.length? '<div class="task-grid">'+myT.map(taskTile).join('') +'</div>' : '<div class="empty">No open tasks assigned to you.</div>')+'</div>';
+    html+='<div class="sec"><div class="sec-h"><h2>My orders</h2><span class="c">'+myPO.length+'</span></div>'
+      +(myPO.length? myPO.map(tile).join('') : '<div class="empty">No orders assigned to you.</div>')+'</div>';
+    el.innerHTML=html;
+  }
+  function todayStr(){ return new Date().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short'}); }
 
   function detailHtml(p){
     var age=ageDays(p), over=isOverdue(p);
@@ -1023,7 +1131,7 @@
       +     (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +     ageTxt
       +   '</div>'
-      +   '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+'</div>'
+      +   '<div class="status">'+firmPill(p)+stagePill(p)+dispatchPill(p)+deliveryPill(p)+'</div>'
       +   '<div class="foot">'+who+'<div class="links">'+poCopy+'</div></div>'
       + '</div>'
       + (norm(p.manager_note) ? '<div class="mgr-note"><b>Manager\u2019s note</b><span>'+esc(p.manager_note)+'</span></div>' : '')
