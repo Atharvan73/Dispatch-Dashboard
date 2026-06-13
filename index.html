@@ -18,6 +18,8 @@
         overdue carry-forward/close for creator/manager; tasks shown on board + PO detail.
   v1.6  Tasks below the pulse; dashboard shows only today/overdue/pending tasks;
         creator or manager can edit and delete a task.
+  v1.7  Archive cutoff: POs before 5 Jun 2026 hidden from board/pulse/attention but
+        kept and findable via a PO search (search includes archived).
 -->
 <html>
 <head>
@@ -107,6 +109,8 @@
   .s-deliv{background:var(--ok-soft);color:var(--ok)}
   .s-pend{border:1px solid var(--line2);color:var(--muted)}
   .s-stage{background:var(--slate-soft);color:var(--slate)}
+  .s-arch{background:var(--neutral-soft);color:var(--faint)}
+  .searchbar{margin:0 0 16px}
   .overdue{color:var(--danger)!important;font-weight:500}
 
   .stage-edit{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;
@@ -288,6 +292,7 @@
       <span class="count" id="count"></span>
     </div>
     <div class="chips" id="chips"></div>
+    <div class="searchbar"><input id="poSearch" class="inp" placeholder="Search any PO — number, title or company (includes archived)" oninput="setQuery(this.value)"></div>
     <div id="list">
       <div class="state"><div class="spin"></div>Loading orders…</div>
     </div>
@@ -301,12 +306,15 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v1.6';
+  var VERSION = 'v1.7';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
   var ALL = [];
   var FILTER = 'all';
+  var QUERY = '';
+  var CUTOFF = new Date(2026, 5, 5); // 5 Jun 2026 — POs dated before this are archived
+  function isArchived(p){ var d = parseDate(p.po_date); return !!d && d < CUTOFF; }
   var FILTERS = [
     {key:'all',     label:'All',         test:function(){return true;}},
     {key:'unassigned', label:'Unassigned', test:function(p){return !p.assigned_rep;}},
@@ -852,40 +860,50 @@
       +   (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +   ageTxt
       + '</div>'
-      + '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+(norm(p.manager_note)?'<span class="pill p-note">Note</span>':'')+'</div>'
+      + '<div class="status">'+stagePill(p)+dispatchPill(p)+deliveryPill(p)+(norm(p.manager_note)?'<span class="pill p-note">Note</span>':'')+(isArchived(p)?'<span class="pill s-arch">Archived</span>':'')+'</div>'
       + '<div class="foot">'+who+'<div class="links">'+poCopy+'<button class="btn go" onclick="openDetail(\''+esc(p.po_id)+'\')">View details →</button></div></div>'
       + '</div>';
   }
 
+  function byDateDesc(a,b){
+    var da=parseDate(a.po_date), db=parseDate(b.po_date);
+    return (db?db.getTime():-Infinity) - (da?da.getTime():-Infinity);
+  }
   function render(){
-    var base = scopedRows();
+    var scoped = scopedRows();
+    var q = norm(QUERY);
+    var el=document.getElementById('list');
+    if(q){
+      var hits = scoped.filter(function(p){
+        return norm(p.po_number).indexOf(q)>-1 || norm(p.title).indexOf(q)>-1 || norm(p.customer_name).indexOf(q)>-1;
+      }).sort(byDateDesc);
+      el.innerHTML = hits.length ? hits.map(tile).join('') : '<div class="state">No POs match that search.</div>';
+      document.getElementById('count').textContent = hits.length ? (hits.length+' result'+(hits.length===1?'':'s')+' · incl. archived') : '';
+      return;
+    }
+    var base = scoped.filter(function(p){return !isArchived(p);});
     var f = FILTERS.filter(function(x){return x.key===FILTER;})[0] || FILTERS[0];
     var rows = base.filter(f.test);
-    var el=document.getElementById('list');
-    if(!base.length){ el.innerHTML='<div class="state">'+(isManager()?'No orders yet. Run the sync, then refresh.':'Nothing assigned to you yet.')+'</div>'; return; }
+    if(!base.length){ el.innerHTML='<div class="state">'+(isManager()?'No current orders. Older ones are archived — use the search above to find them.':'Nothing assigned to you yet.')+'</div>'; document.getElementById('count').textContent=''; return; }
     if(!rows.length){ el.innerHTML='<div class="state">No orders in this filter.</div>'; return; }
-    // newest PO date first; undated go last
-    rows.sort(function(a,b){
-      var da=parseDate(a.po_date), db=parseDate(b.po_date);
-      var ta=da?da.getTime():-Infinity, tb=db?db.getTime():-Infinity;
-      return tb-ta;
-    });
+    rows.sort(byDateDesc);
     el.innerHTML = rows.map(tile).join('');
     document.getElementById('count').textContent = rows.length+' of '+base.length+' orders';
   }
 
   function renderChips(){
-    var base = scopedRows();
+    var base = scopedRows().filter(function(p){return !isArchived(p);});
     document.getElementById('chips').innerHTML = FILTERS.map(function(f){
       var n = base.filter(f.test).length;
       return '<button class="chip'+(f.key===FILTER?' on':'')+'" onclick="setFilter(\''+f.key+'\')">'+f.label+' <span class="n">'+n+'</span></button>';
     }).join('');
   }
   function renderPulse(){
-    var open = ALL.filter(isOpen).length;
-    var unassigned = ALL.filter(function(p){return !p.assigned_rep;}).length;
-    var overdue = ALL.filter(isOverdue).length;
-    var fresh = ALL.filter(function(p){var a=ageDays(p);return a!=null && a<=2;}).length;
+    var cur = ALL.filter(function(p){return !isArchived(p);});
+    var open = cur.filter(isOpen).length;
+    var unassigned = cur.filter(function(p){return !p.assigned_rep;}).length;
+    var overdue = cur.filter(isOverdue).length;
+    var fresh = cur.filter(function(p){var a=ageDays(p);return a!=null && a<=2;}).length;
     var cards = [
       {l:'Open',       v:open,       k:'all'},
       {l:'Unassigned', v:unassigned, k:'unassigned'},
@@ -899,7 +917,7 @@
   }
 
   function renderAttention(){
-    var rows = ALL.filter(isOverdue).sort(function(a,b){
+    var rows = ALL.filter(function(p){return !isArchived(p) && isOverdue(p);}).sort(function(a,b){
       return (ageDays(b)-targetDays(b)) - (ageDays(a)-targetDays(a)); // most overdue first
     });
     var el = document.getElementById('attention');
@@ -925,8 +943,11 @@
       + '<div class="attn-list">'+list+'</div>'+more+'</div>';
   }
 
+  function setQuery(v){ QUERY=v; render(); }
   function setFilter(k){
-    FILTER=k; renderPulse(); renderChips(); render();
+    FILTER=k; QUERY='';
+    var sb=document.getElementById('poSearch'); if(sb) sb.value='';
+    renderPulse&&(isManager()&&renderPulse()); renderChips(); render();
     document.getElementById('boardhead').scrollIntoView({behavior:'smooth', block:'start'});
   }
 
