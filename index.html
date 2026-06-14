@@ -274,15 +274,17 @@
   .po-x{background:none;border:none;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0}
 
 
-  /* dispatch item rows */
-  .dirow{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start;padding:14px 16px;border-top:1px solid var(--line)}
+  /* dispatch item rows — original irow style preserved */
+  .dirow{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center;padding:13px 16px;border-top:1px solid var(--line)}
   .dirow:first-child{border-top:none}
   .dirow.d-pending{background:var(--warn-soft)}
   .di-desc .nm{font-size:14px;font-weight:500}
-  .di-desc .qty-line{font-size:12.5px;color:var(--muted);margin-top:3px}
-  .di-desc .inv-lines{margin-top:7px;padding-left:12px;border-left:2px solid var(--line2);display:flex;flex-direction:column;gap:3px}
+  .di-desc .meta2{font-size:12px;color:var(--faint);margin-top:2px}
+  .di-desc .disp-line{font-size:12.5px;color:var(--muted);margin-top:4px}
+  .di-desc .disp-line b{color:var(--ink)}
+  .di-desc .inv-lines{margin-top:5px;padding-left:10px;border-left:2px solid var(--line2);display:flex;flex-direction:column;gap:2px}
   .di-desc .inv-line{font-size:12px;color:var(--muted)}
-  .di-right{display:flex;align-items:center;gap:8px;padding-top:2px}
+  .di-right{display:flex;align-items:center;gap:16px;white-space:nowrap}
 
   /* invoice list rows */
   .inv-row{display:flex;align-items:center;gap:12px;padding:13px 16px;border-top:1px solid var(--line);flex-wrap:wrap}
@@ -1158,20 +1160,23 @@
       var dispatched = dls.reduce(function(s,d){return s+d.qty;},0);
       var pending = Math.max(0, ordered - dispatched);
       var fullyDisp = ordered > 0 && dispatched >= ordered;
-      var price = it.price ? fmtINR(it.price)+' each' : '';
-      var qtyLine = 'Ordered '+ordered+(it.uom?' '+esc(it.uom):'')+' · dispatched '+dispatched+' · pending '+pending
-        + (price ? ' · '+price : '');
+      var qty = it.po_qty ? '<span class="iqty"><b>'+esc(it.po_qty)+'</b>'+(it.uom?' '+esc(it.uom):'')+'</span>' : '';
+      var price = it.price ? '<span class="iprice">'+fmtINR(it.price)+'</span>' : '';
       var pill = fullyDisp
         ? '<span class="pill s-disp">✓ Dispatched</span>'
         : (dispatched>0 ? '<span class="pill s-part">Partial</span>' : '<span class="pill s-pend">Pending</span>');
+      var dispLine = (dls.length || ordered>0)
+        ? '<div class="disp-line">Dispatched <b>'+dispatched+'</b>'+(it.uom?' '+esc(it.uom):'')+' · pending <b>'+pending+'</b>'+(it.uom?' '+esc(it.uom):'')+'</div>'
+        : '';
       var invLines = dls.map(function(d){
         return '<div class="inv-line">'+d.qty+(it.uom?' '+esc(it.uom):'')+' · invoice '+esc(d.inv_no)+'</div>';
       }).join('');
-      return '<div class="dirow'+((!fullyDisp&&dispatched===0)?' d-pending':'')+'"><div class="di-desc">'
+      return '<div class="dirow'+((!fullyDisp&&dispatched===0&&ordered>0)?' d-pending':'')+'"><div class="di-desc">'
         + '<div class="nm">'+esc(it.description||('Item '+it.item_no))+'</div>'
-        + '<div class="qty-line">'+qtyLine+'</div>'
+        + (it.item_no?'<div class="meta2">Item '+esc(it.item_no)+'</div>':'')
+        + dispLine
         + (invLines ? '<div class="inv-lines">'+invLines+'</div>' : '')
-        + '</div><div class="di-right">'+pill+'</div></div>';
+        + '</div><div class="di-right">'+price+qty+pill+'</div></div>';
     }).join('');
 
     return '<button class="back" onclick="closeDetail()">← Back to board</button>'
