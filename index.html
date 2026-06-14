@@ -26,6 +26,8 @@
         filters; My Daily Work shows the user's tasks + assigned orders.
   v2.0  GeM / IREPS orders included, with a firm tag (Shakti / Universal) and a
         firm filter; channel pill (GeM / IREPS) on each order.
+  v2.1  Dispatch data in detail view: per-item dispatched/ordered progress with
+        invoice breakdown per item; Invoices section with LR status and POD status.
 -->
 <html>
 <head>
@@ -271,6 +273,29 @@
     color:var(--accent);padding:4px 8px;border-radius:999px;margin-top:6px}
   .po-x{background:none;border:none;color:inherit;cursor:pointer;font-size:14px;line-height:1;padding:0}
 
+
+  /* dispatch item rows */
+  .dirow{display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start;padding:14px 16px;border-top:1px solid var(--line)}
+  .dirow:first-child{border-top:none}
+  .dirow.d-pending{background:var(--warn-soft)}
+  .di-desc .nm{font-size:14px;font-weight:500}
+  .di-desc .qty-line{font-size:12.5px;color:var(--muted);margin-top:3px}
+  .di-desc .inv-lines{margin-top:7px;padding-left:12px;border-left:2px solid var(--line2);display:flex;flex-direction:column;gap:3px}
+  .di-desc .inv-line{font-size:12px;color:var(--muted)}
+  .di-right{display:flex;align-items:center;gap:8px;padding-top:2px}
+
+  /* invoice list rows */
+  .inv-row{display:flex;align-items:center;gap:12px;padding:13px 16px;border-top:1px solid var(--line);flex-wrap:wrap}
+  .inv-row:first-child{border-top:none}
+  .inv-main{flex:1;min-width:0}
+  .inv-no{font-size:14px;font-weight:600}
+  .inv-meta{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .inv-badges{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+  .p-lr{background:var(--ok-soft);color:var(--ok)}
+  .p-nolr{background:var(--neutral-soft);color:var(--muted)}
+  .p-pod{background:var(--neutral-soft);color:var(--muted)}
+  .p-poddone{background:var(--ok-soft);color:var(--ok)}
+
   .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(20px);
     background:var(--ink);color:#fff;font-size:13px;padding:10px 16px;border-radius:10px;
     opacity:0;pointer-events:none;transition:.25s}
@@ -326,11 +351,12 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.0';
+  var VERSION = 'v2.1';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
   var ALL = [];
+  var DISPATCHES = {}; // keyed by po_id
   var FILTER = 'all';
   var QUERY = '';
   var REP_FILTER = ''; // manager: '' = all, '__unassigned__', or a rep name
@@ -778,10 +804,14 @@
 
   function load(){
     document.getElementById('list').innerHTML='<div class="state"><div class="spin"></div>Loading orders…</div>';
-    fetch(API + '?action=getPOs')
-      .then(function(r){ return r.json(); })
-      .then(onData)
-      .catch(onErr);
+    Promise.all([
+      fetch(API + '?action=getPOs').then(function(r){return r.json();}),
+      fetch(API + '?action=getDispatches').then(function(r){return r.json();}).catch(function(){return {};})
+    ]).then(function(results){
+      var disps = results[1] || {};
+      DISPATCHES = disps;
+      onData(results[0]);
+    }).catch(onErr);
   }
   function onErr(e){
     document.getElementById('list').innerHTML='<div class="state">Couldn\'t load orders.<br>'+esc(e&&e.message)+'</div>';
@@ -1111,13 +1141,37 @@
     var who = assignee(p);
     var poCopy = p.po_file_link ? '<a class="btn" href="'+esc(p.po_file_link)+'" target="_blank">'+ICON('file')+'PO copy</a>' : '';
 
+    var dispData = DISPATCHES[String(p.po_id)] || {lines:[], invoices:[]};
+    var dispLines = dispData.lines || [];
+    var dispInvs  = dispData.invoices || [];
+
+    // build a map: item_id -> array of {inv_no, qty}
+    var dispByItem = {};
+    dispLines.forEach(function(dl){
+      if(!dispByItem[dl.item_id]) dispByItem[dl.item_id] = [];
+      dispByItem[dl.item_id].push({inv_no: dl.invoice_no, qty: Number(dl.qty)||0});
+    });
+
     var itemRows = items.map(function(it){
-      var qty = it.po_qty ? '<span class="iqty"><b>'+esc(it.po_qty)+'</b>'+(it.uom?' '+esc(it.uom):'')+'</span>' : '';
-      var price = it.price ? '<span class="iprice">'+fmtINR(it.price)+'</span>' : '';
-      return '<div class="irow"><div class="idesc">'
-        +   '<div class="nm">'+esc(it.description||('Item '+it.item_no))+'</div>'
-        +   (it.item_no?'<div class="meta2">Item '+esc(it.item_no)+'</div>':'')
-        + '</div><div class="iright">'+price+qty+'<span class="pill s-pend">Pending</span></div></div>';
+      var ordered = Number(it.po_qty)||0;
+      var dls = dispByItem[it.item_id] || [];
+      var dispatched = dls.reduce(function(s,d){return s+d.qty;},0);
+      var pending = Math.max(0, ordered - dispatched);
+      var fullyDisp = ordered > 0 && dispatched >= ordered;
+      var price = it.price ? fmtINR(it.price)+' each' : '';
+      var qtyLine = 'Ordered '+ordered+(it.uom?' '+esc(it.uom):'')+' · dispatched '+dispatched+' · pending '+pending
+        + (price ? ' · '+price : '');
+      var pill = fullyDisp
+        ? '<span class="pill s-disp">✓ Dispatched</span>'
+        : (dispatched>0 ? '<span class="pill s-part">Partial</span>' : '<span class="pill s-pend">Pending</span>');
+      var invLines = dls.map(function(d){
+        return '<div class="inv-line">'+d.qty+(it.uom?' '+esc(it.uom):'')+' · invoice '+esc(d.inv_no)+'</div>';
+      }).join('');
+      return '<div class="dirow'+((!fullyDisp&&dispatched===0)?' d-pending':'')+'"><div class="di-desc">'
+        + '<div class="nm">'+esc(it.description||('Item '+it.item_no))+'</div>'
+        + '<div class="qty-line">'+qtyLine+'</div>'
+        + (invLines ? '<div class="inv-lines">'+invLines+'</div>' : '')
+        + '</div><div class="di-right">'+pill+'</div></div>';
     }).join('');
 
     return '<button class="back" onclick="closeDetail()">← Back to board</button>'
@@ -1152,7 +1206,32 @@
       +   (function(){ var rel=TASKS.filter(function(t){return String(t.linked_po_id)===String(p.po_id) && norm(t.status)!=='cancelled';});
             return rel.length ? '<div class="task-grid">'+rel.map(taskTile).join('')+'</div>' : '<div class="empty">No tasks linked to this PO.</div>'; })()
       + '</div>'
-      + '<div class="sec"><div class="sec-h"><h2>Invoices</h2></div><div class="empty">No invoices linked yet.</div></div>'
+      + (function(){
+        var invs = (DISPATCHES[String(p.po_id)] && DISPATCHES[String(p.po_id)].invoices) || [];
+        if(!invs.length) return '<div class="sec"><div class="sec-h"><h2>Invoices</h2><span class="c">0</span></div><div class="empty">No invoices dispatched yet.</div></div>';
+        var rows = invs.map(function(inv){
+          var lrBadge = inv.lr_no
+            ? '<span class="pill p-lr">✓ LR linked</span>'
+            : '<span class="pill p-nolr">No LR</span>';
+          var podBadge = norm(inv.pod_status)==='delivered'
+            ? '<span class="pill p-poddone">POD done</span>'
+            : '<span class="pill p-pod">POD pending</span>';
+          var viewBtn = inv.file_link
+            ? '<a class="btn" href="'+esc(inv.file_link)+'" target="_blank">View ↗</a>'
+            : '';
+          var lineCount = inv.line_count || 0;
+          return '<div class="inv-row">'
+            + '<div class="inv-main">'
+            +   '<div class="inv-no">'+esc(inv.invoice_no)+'</div>'
+            +   '<div class="inv-meta">'+esc(inv.invoice_date)+(inv.invoice_value?' · '+fmtINR(inv.invoice_value):'')+(lineCount?' · '+lineCount+' item'+(lineCount===1?'':'s'):'')+'</div>'
+            + '</div>'
+            + '<div class="inv-badges">'+lrBadge+podBadge+'</div>'
+            + viewBtn
+            + '</div>';
+        }).join('');
+        return '<div class="sec"><div class="sec-h"><h2>Invoices</h2><span class="c">'+invs.length+'</span></div>'
+          + '<div class="items">'+rows+'</div></div>';
+      })()
       + '<div class="sec"><div class="sec-h"><h2>Quotation</h2></div><div class="empty">Quotation link — coming later.</div></div>';
   }
 
