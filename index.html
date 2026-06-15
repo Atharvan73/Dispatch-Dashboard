@@ -26,9 +26,8 @@
         filters; My Daily Work shows the user's tasks + assigned orders.
   v2.0  GeM / IREPS orders included, with a firm tag (Shakti / Universal) and a
         firm filter; channel pill (GeM / IREPS) on each order.
-  v2.2  Credit notes in detail view: per-item net dispatched qty (after credits);
-        CN lines shown indented below invoice lines with minus sign; CREDIT NOTES
-        section below INVOICES with CN number, date, value, reason, PDF link.
+  v2.3  PO ageing now uses received_date (Gmail arrival date) instead of PO date;
+        both dates shown in detail view; falls back to PO date for older entries.
 -->
 <html>
 <head>
@@ -360,7 +359,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.2';
+  var VERSION = 'v2.3';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -842,7 +841,8 @@
     return new Date(+m[3], +m[2]-1, +m[1]);
   }
   function ageDays(p){
-    var d = parseDate(p.po_date); if(!d) return null;
+    // Use received_date (when PO arrived in Gmail) if available, else fall back to po_date
+    var d = parseDate(p.received_date) || parseDate(p.po_date); if(!d) return null;
     return Math.floor((stripTime(new Date()) - stripTime(d))/86400000);
   }
   function stripTime(d){return new Date(d.getFullYear(),d.getMonth(),d.getDate());}
@@ -1216,7 +1216,8 @@
       +     '<div class="t-sub">'+sub+'</div></div>'+priorityPill(p)+'</div>'
       +   buyer
       +   '<div class="meta">'
-      +     (p.po_date?'<span>'+ICON('cal')+'PO '+esc(p.po_date)+'</span>':'')
+      +     (p.po_date?'<span>'+ICON('cal')+'PO dated '+esc(p.po_date)+'</span>':'')
+      +     (p.received_date?'<span>'+ICON('cal')+'Received '+esc(p.received_date)+'</span>':'')
       +     (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +     ageTxt
       +   '</div>'
@@ -1224,7 +1225,7 @@
       +   '<div class="foot">'+who+'<div class="links">'+poCopy+'</div></div>'
       + '</div>'
       + (norm(p.manager_note) ? '<div class="mgr-note"><b>Manager\u2019s note</b><span>'+esc(p.manager_note)+'</span></div>' : '')
-      + '<div class="sec"><div class="sec-h"><h2>Processing stage</h2></div>'
+      + (norm(p.dispatch_status)!=='dispatched' ? '<div class="sec"><div class="sec-h"><h2>Processing stage</h2></div>'
       +   '<div class="stage-edit">'
       +     '<select id="stageSel" class="assign">'
       +       STAGES.map(function(s){ return '<option value="'+esc(s.v)+'"'+(norm(s.v)===norm(p.processing_stage)?' selected':'')+'>'+esc(s.l)+'</option>'; }).join('')
@@ -1232,7 +1233,7 @@
       +     '<textarea id="stageRemark" class="remark" placeholder="Add remarks (optional) — e.g. packed 8 of 12 boxes, awaiting transporter"></textarea>'
       +     '<button class="btn go" onclick="setStage(\''+esc(p.po_id)+'\')">Update stage</button>'
       +   '</div>'
-      + '</div>'
+      + '</div>' : '')
       + '<div class="sec"><div class="sec-h"><h2>Items</h2><span class="c">'+items.length+'</span></div>'
       +   (items.length ? '<div class="items">'+itemRows+'</div>' : '<div class="empty">No line items captured.</div>')
       + '</div>'
