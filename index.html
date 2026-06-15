@@ -1221,8 +1221,11 @@
           var podBadge = norm(inv.pod_status)==='delivered'
             ? '<span class="pill p-poddone">POD done</span>'
             : '<span class="pill p-pod">POD pending</span>';
+          var lrBtn = inv.lr_image_link
+            ? '<a class="btn" href="'+esc(inv.lr_image_link)+'" target="_blank">LR ↗</a>'
+            : '';
           var viewBtn = inv.file_link
-            ? '<a class="btn" href="'+esc(inv.file_link)+'" target="_blank">View ↗</a>'
+            ? '<a class="btn" href="'+esc(inv.file_link)+'" target="_blank">Invoice ↗</a>'
             : '';
           var lineCount = inv.line_count || 0;
           return '<div class="inv-row">'
@@ -1231,6 +1234,7 @@
             +   '<div class="inv-meta">'+esc(inv.invoice_date)+(inv.invoice_value?' · '+fmtINR(inv.invoice_value):'')+(lineCount?' · '+lineCount+' item'+(lineCount===1?'':'s'):'')+'</div>'
             + '</div>'
             + '<div class="inv-badges">'+lrBadge+podBadge+'</div>'
+            + lrBtn
             + viewBtn
             + '</div>';
         }).join('');
