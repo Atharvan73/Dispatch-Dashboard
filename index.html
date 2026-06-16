@@ -26,8 +26,9 @@
         filters; My Daily Work shows the user's tasks + assigned orders.
   v2.0  GeM / IREPS orders included, with a firm tag (Shakti / Universal) and a
         firm filter; channel pill (GeM / IREPS) on each order.
-  v2.3  PO ageing now uses received_date (Gmail arrival date) instead of PO date;
-        both dates shown in detail view; falls back to PO date for older entries.
+  v2.4  "Add to Daily Work" button on PO detail (rep adds self, manager picks rep);
+        My Daily Work page shows today's + upcoming work entries with reschedule;
+        midnight carry-forward trigger in backend.
 -->
 <html>
 <head>
@@ -359,12 +360,13 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.3';
+  var VERSION = 'v2.4';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
   var ALL = [];
   var DISPATCHES = {}; // keyed by po_id
+  var DAILY_WORK = []; // all daily work entries
   var FILTER = 'all';
   var QUERY = '';
   var REP_FILTER = ''; // manager: '' = all, '__unassigned__', or a rep name
@@ -814,10 +816,11 @@
     document.getElementById('list').innerHTML='<div class="state"><div class="spin"></div>Loading orders…</div>';
     Promise.all([
       fetch(API + '?action=getPOs').then(function(r){return r.json();}),
-      fetch(API + '?action=getDispatches').then(function(r){return r.json();}).catch(function(){return {};})
+      fetch(API + '?action=getDispatches').then(function(r){return r.json();}).catch(function(){return {};}),
+      fetch(API + '?action=getDailyWork').then(function(r){return r.json();}).catch(function(){return [];})
     ]).then(function(results){
-      var disps = results[1] || {};
-      DISPATCHES = disps;
+      DISPATCHES = results[1] || {};
+      DAILY_WORK = results[2] || [];
       onData(results[0]);
     }).catch(onErr);
   }
@@ -1123,20 +1126,237 @@
   }
   function setTaskFilter(k){ TASK_FILTER=k; renderTasksPage(); }
 
+  /* ---- Daily Work helpers ---- */
+
+  // Returns today's date as YYYY-MM-DD string
+  function todayISO() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  }
+
+  // Returns tomorrow as YYYY-MM-DD
+  function tomorrowISO() {
+    var d = new Date(); d.setDate(d.getDate()+1);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  }
+
+  // Get daily work entries for a given rep+po
+  function dwEntriesFor(poId, repId) {
+    return DAILY_WORK.filter(function(e){
+      return e.po_id === poId && e.rep_id === repId;
+    });
+  }
+
+  // Check if PO already has a pending future entry for this rep
+  function dwHasFuture(poId, repId) {
+    var tod = todayISO();
+    return DAILY_WORK.some(function(e){
+      return e.po_id === poId && e.rep_id === repId && !e.done && e.work_date > tod;
+    });
+  }
+
+  // Check if PO already in today's work for this rep
+  function dwHasToday(poId, repId) {
+    var tod = todayISO();
+    return DAILY_WORK.some(function(e){
+      return e.po_id === poId && e.rep_id === repId && e.work_date === tod;
+    });
+  }
+
+  // Render the "Add to Daily Work" button for a PO detail view
+  function dwBtn(p) {
+    if (!ME) return '';
+    var repId = ME.role === 'manager' ? null : ME.name; // manager uses modal picker
+    if (ME.role !== 'manager') {
+      // Rep: show state-aware button
+      if (dwHasToday(p.po_id, ME.name)) {
+        return '<button class="btn" disabled style="color:var(--ok)">✓ In today\'s work</button>';
+      }
+      if (dwHasFuture(p.po_id, ME.name)) {
+        var fut = DAILY_WORK.find(function(e){ return e.po_id===p.po_id && e.rep_id===ME.name && !e.done && e.work_date > todayISO(); });
+        return '<button class="btn" onclick="openDWModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')" style="color:var(--warn)">📅 Scheduled '+esc(fut?fut.work_date:'')+'</button>';
+      }
+    }
+    return '<button class="btn go" onclick="openDWModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')">+ Daily work</button>';
+  }
+
+  // Open the Add to Daily Work modal
+  function openDWModal(poId, poNumber) {
+    var users = [];
+    if (ME && ME.role === 'manager') {
+      // manager can assign to any rep or self
+      users = ALL.length ? [] : [];
+      // fetch user list from rendered data
+      var sel = '<select id="dwRepSel" class="assign" style="width:100%;margin-bottom:12px">';
+      sel += '<option value="'+esc(ME.name)+'">Myself ('+esc(ME.name)+')</option>';
+      // get unique rep names from ALL
+      var repNames = {};
+      ALL.forEach(function(p){ if(p.assigned_rep) repNames[p.assigned_rep]=true; });
+      // also add known users from TASKS
+      TASKS.forEach(function(t){ if(t.assigned_to) repNames[t.assigned_to]=true; });
+      Object.keys(repNames).forEach(function(n){
+        if(n !== ME.name) sel += '<option value="'+esc(n)+'">'+esc(n)+'</option>';
+      });
+      sel += '</select>';
+      var repRow = '<div style="margin-bottom:4px;font-size:13px;font-weight:500">For</div>'+sel;
+    } else {
+      var repRow = '';
+    }
+
+    var todayFut = dwHasFuture(poId, ME ? ME.name : '');
+    var futEntry = ME ? DAILY_WORK.find(function(e){ return e.po_id===poId && e.rep_id===ME.name && !e.done && e.work_date > todayISO(); }) : null;
+
+    var html = '<div class="modal-bg" onclick="if(event.target===this)closeDWModal()" id="dwModalBg">'
+      + '<div class="modal">'
+      + '<h3>Add to Daily Work</h3>'
+      + '<div class="msub">PO '+esc(poNumber)+'</div>'
+      + repRow
+      + (futEntry ? '<div style="background:var(--warn-soft);color:var(--warn);padding:10px 12px;border-radius:8px;font-size:13px;margin-bottom:12px">⚠ Already scheduled for '+esc(futEntry.work_date)+' — pick a new date to reschedule</div>' : '')
+      + '<div style="display:flex;flex-direction:column;gap:8px;margin-bottom:8px">'
+      +   '<button class="btn go" onclick="submitDW(\''+esc(poId)+'\',\''+esc(poNumber)+'\',\'today\',\''+esc(futEntry?futEntry.entry_id:'')+'\')">Today ('+esc(todayISO())+')</button>'
+      +   '<button class="btn go" onclick="submitDW(\''+esc(poId)+'\',\''+esc(poNumber)+'\',\'tomorrow\',\''+esc(futEntry?futEntry.entry_id:'')+'\')">Tomorrow ('+esc(tomorrowISO())+')</button>'
+      + '</div>'
+      + '<div style="display:flex;gap:8px;align-items:center">'
+      +   '<input type="date" id="dwDatePick" class="assign" style="flex:1" min="'+esc(todayISO())+'" value="'+esc(tomorrowISO())+'">'
+      +   '<button class="btn go" onclick="submitDW(\''+esc(poId)+'\',\''+esc(poNumber)+'\',\'pick\',\''+esc(futEntry?futEntry.entry_id:'')+'\')" >Set date</button>'
+      + '</div>'
+      + '<div class="modal-actions"><button class="btn" onclick="closeDWModal()">Cancel</button></div>'
+      + '</div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  }
+
+  function closeDWModal() {
+    var el = document.getElementById('dwModalBg'); if(el) el.remove();
+  }
+
+  function submitDW(poId, poNumber, which, existingEntryId) {
+    var date = which === 'today' ? todayISO() : which === 'tomorrow' ? tomorrowISO() : document.getElementById('dwDatePick').value;
+    if (!date) { toast('Please pick a date'); return; }
+
+    var repId = ME.role === 'manager'
+      ? (document.getElementById('dwRepSel') ? document.getElementById('dwRepSel').value : ME.name)
+      : ME.name;
+
+    closeDWModal();
+
+    // If rescheduling an existing future entry
+    if (existingEntryId && which !== 'today') {
+      fetch(API, { method:'POST', body: JSON.stringify({ action:'rescheduleDailyWork', entry_id: existingEntryId, work_date: date, by: ME.name }) })
+        .then(function(r){ return r.json(); })
+        .then(function(res){
+          if (res.ok) {
+            // update in memory
+            var idx = DAILY_WORK.findIndex(function(e){ return e.entry_id === existingEntryId; });
+            if (idx >= 0) DAILY_WORK[idx].work_date = date;
+            toast('Rescheduled to ' + date);
+            renderDaily();
+          } else { toast('Error: ' + (res.error||'unknown')); }
+        });
+      return;
+    }
+
+    fetch(API, { method:'POST', body: JSON.stringify({ action:'addDailyWork', po_id: poId, rep_id: repId, work_date: date, by: ME.name }) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok) {
+          DAILY_WORK.push({ entry_id: res.entry_id, rep_id: repId, po_id: poId, work_date: date, done: false, carried_over: false, added_by: ME.name });
+          toast('Added to daily work for ' + (repId !== ME.name ? repId + ' on ' : '') + date);
+          renderDaily();
+          // Re-render detail if open
+          if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
+            var po = ALL.find(function(p){ return p.po_id === poId; });
+            if (po) document.getElementById('detailPage').innerHTML = detailHtml(po);
+          }
+        } else { toast('Error: ' + (res.error||'unknown')); }
+      });
+  }
+
   // ---- My Daily Work ----
   function renderDaily(){
     var el=document.getElementById('dailyPage'); if(!el) return;
-    var me=norm(ME&&ME.name);
-    var myT=TASKS.filter(function(t){ return taskActive(t) && norm(t.assigned_to)===me; })
+    var me=ME&&ME.name||'';
+    var meNorm=norm(me);
+    var tod=todayISO();
+
+    var myT=TASKS.filter(function(t){ return taskActive(t) && norm(t.assigned_to)===meNorm; })
       .sort(function(a,b){ var da=a.due_at?new Date(a.due_at).getTime():Infinity, db=b.due_at?new Date(b.due_at).getTime():Infinity; return da-db; });
-    var myPO=ALL.filter(function(p){ return !isArchived(p) && norm(p.assigned_rep)===me; }).sort(byDateDesc);
+
+    // Daily Work entries for today (my own, or all reps if manager)
+    var todayEntries = DAILY_WORK.filter(function(e){
+      return e.work_date === tod && !e.done && (ME&&ME.role==='manager' ? true : norm(e.rep_id)===meNorm);
+    });
+    // Upcoming (future) entries
+    var futureEntries = DAILY_WORK.filter(function(e){
+      return e.work_date > tod && !e.done && (ME&&ME.role==='manager' ? true : norm(e.rep_id)===meNorm);
+    }).sort(function(a,b){ return a.work_date < b.work_date ? -1 : 1; });
+
+    function dwPoTile(entry) {
+      var po = ALL.find(function(p){ return p.po_id === entry.po_id; });
+      if (!po) return '';
+      var carried = entry.carried_over ? '<span class="pill" style="background:var(--warn-soft);color:var(--warn)">Carried over</span>' : '';
+      var repTag = ME&&ME.role==='manager' ? '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">'+esc(entry.rep_id)+'</span>' : '';
+      var reschedBtn = entry.work_date >= tod
+        ? '<button class="btn" onclick="openRescheduleModal(\''+esc(entry.entry_id)+'\',\''+esc(po.po_number)+'\',\''+esc(entry.work_date)+'\')" style="font-size:12px">Reschedule</button>'
+        : '';
+      return '<div class="tile" onclick="openDetail(\''+esc(po.po_id)+'\')" style="cursor:pointer">'
+        + '<div class="t-top"><div style="min-width:0"><div class="t-title">'+esc(po.title||po.customer_name)+'</div>'
+        + '<div class="t-sub"><span class="mono">'+esc(po.po_number)+'</span> · '+esc(po.customer_name)+'</div></div>'
+        + dispatchPill(po)+'</div>'
+        + '<div class="status" style="margin-top:8px">'+carried+repTag+'</div>'
+        + '<div class="foot" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><div></div><div class="links">'+reschedBtn+'</div></div>'
+        + '</div>';
+    }
+
     var html='<div class="head"><h1>My Daily Work</h1><span class="count">'+todayStr()+'</span></div>';
+
+    // Today's work
+    html+='<div class="sec"><div class="sec-h"><h2>Today</h2><span class="c">'+todayEntries.length+'</span></div>'
+      +(todayEntries.length ? todayEntries.map(dwPoTile).join('') : '<div class="empty">Nothing scheduled for today.</div>')+'</div>';
+
+    // Upcoming
+    if (futureEntries.length) {
+      html+='<div class="sec"><div class="sec-h"><h2>Upcoming</h2><span class="c">'+futureEntries.length+'</span></div>'
+        +futureEntries.map(dwPoTile).join('')+'</div>';
+    }
+
+    // My tasks
     html+='<div class="sec"><div class="sec-h"><h2>My tasks</h2><span class="c">'+myT.length+'</span>'
       +'<button class="btn go" style="margin-left:auto" onclick="openTask()">+ New task</button></div>'
       +(myT.length? '<div class="task-grid">'+myT.map(taskTile).join('') +'</div>' : '<div class="empty">No open tasks assigned to you.</div>')+'</div>';
-    html+='<div class="sec"><div class="sec-h"><h2>My orders</h2><span class="c">'+myPO.length+'</span></div>'
-      +(myPO.length? myPO.map(tile).join('') : '<div class="empty">No orders assigned to you.</div>')+'</div>';
+
     el.innerHTML=html;
+  }
+
+  function openRescheduleModal(entryId, poNumber, currentDate) {
+    var html = '<div class="modal-bg" onclick="if(event.target===this)closeReschedModal()" id="dwReschedBg">'
+      + '<div class="modal">'
+      + '<h3>Reschedule</h3>'
+      + '<div class="msub">PO '+esc(poNumber)+' · currently '+esc(currentDate)+'</div>'
+      + '<div style="display:flex;gap:8px;align-items:center">'
+      +   '<input type="date" id="reschedDatePick" class="assign" style="flex:1" min="'+esc(todayISO())+'" value="'+esc(currentDate)+'">'
+      + '</div>'
+      + '<div class="modal-actions"><button class="btn" onclick="closeReschedModal()">Cancel</button>'
+      + '<button class="btn go" onclick="submitReschedule(\''+esc(entryId)+'\')">Reschedule</button></div>'
+      + '</div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  }
+
+  function closeReschedModal() { var el=document.getElementById('dwReschedBg'); if(el) el.remove(); }
+
+  function submitReschedule(entryId) {
+    var date = document.getElementById('reschedDatePick').value;
+    if (!date) { toast('Pick a date'); return; }
+    closeReschedModal();
+    fetch(API, { method:'POST', body: JSON.stringify({ action:'rescheduleDailyWork', entry_id: entryId, work_date: date, by: ME.name }) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok) {
+          var idx = DAILY_WORK.findIndex(function(e){ return e.entry_id === entryId; });
+          if (idx >= 0) DAILY_WORK[idx].work_date = date;
+          toast('Rescheduled to ' + date);
+          renderDaily();
+        } else { toast('Error: ' + (res.error||'unknown')); }
+      });
   }
   function todayStr(){ return new Date().toLocaleDateString('en-IN',{weekday:'short',day:'2-digit',month:'short'}); }
 
@@ -1222,7 +1442,7 @@
       +     ageTxt
       +   '</div>'
       +   '<div class="status">'+firmPill(p)+stagePill(p)+dispatchPill(p)+deliveryPill(p)+'</div>'
-      +   '<div class="foot">'+who+'<div class="links">'+poCopy+'</div></div>'
+      +   '<div class="foot">'+who+'<div class="links">'+poCopy+dwBtn(p)+'</div></div>'
       + '</div>'
       + (norm(p.manager_note) ? '<div class="mgr-note"><b>Manager\u2019s note</b><span>'+esc(p.manager_note)+'</span></div>' : '')
       + (norm(p.dispatch_status)!=='dispatched' ? '<div class="sec"><div class="sec-h"><h2>Processing stage</h2></div>'
