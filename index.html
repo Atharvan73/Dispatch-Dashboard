@@ -373,7 +373,11 @@
   var FIRM_FILTER = ''; // manager: '' = all firms, 'Shakti', or 'Universal'
   function firmOf(p){ return norm(p.firm)==='universal' ? 'Universal' : 'Shakti'; }
   var CUTOFF = new Date(2026, 5, 5); // 5 Jun 2026 — POs dated before this are archived
-  function isArchived(p){ var d = parseDate(p.po_date); return !!d && d < CUTOFF; }
+  function isArchived(p){
+    var d = parseDate(p.received_date) || parseDate(p.po_date);
+    if (!d) return true; // no usable date at all — treat as archived/legacy, not visible
+    return d < CUTOFF;
+  }
   var FILTERS = [
     {key:'all',     label:'All',         test:function(){return true;}},
     {key:'unassigned', label:'Unassigned', test:function(p){return !p.assigned_rep;}},
