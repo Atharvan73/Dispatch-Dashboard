@@ -26,11 +26,15 @@
         filters; My Daily Work shows the user's tasks + assigned orders.
   v2.0  GeM / IREPS orders included, with a firm tag (Shakti / Universal) and a
         firm filter; channel pill (GeM / IREPS) on each order.
-  v2.5  Offline PO upload: rep/manager can upload a PDF or photo of a PO
-        received outside email (WhatsApp, in-person, etc). AI extracts the
-        data, checks for duplicates (same PO number + same customer), and
-        warns with override-reason flow before saving. Tagged as
-        "Offline PO" source with uploaded_by recorded.
+  v2.6  PO closure workflow: rep can request early closure (reason dropdown +
+        remarks), manager approves/rejects from the PO detail; manager can
+        also close a PO directly with the same reason flow. Closed POs are
+        hidden from the main board/pulse/attention, only visible via the new
+        "Closed" filter chip or search, and show a Closed pill with reason.
+  v2.7  New "Closure Requests" tab (manager only) with a pending-count badge,
+        listing all rep closure requests as tiles (View details → opens the
+        PO). Denying a request now requires a typed reason, stored and shown
+        alongside the request.
 -->
 <html>
 <head>
@@ -129,6 +133,8 @@
     background:none;color:var(--muted);cursor:pointer}
   .navtab:hover{color:var(--ink)}
   .navtab.on{background:var(--surface);border-color:var(--line);color:var(--ink)}
+  .navbadge{display:inline-block;background:var(--danger);color:#fff;font-size:11px;font-weight:600;
+    border-radius:10px;padding:1px 6px;margin-left:4px;line-height:1.4}
   .overdue{color:var(--danger)!important;font-weight:500}
 
   .stage-edit{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;
@@ -356,6 +362,7 @@
   <div class="wrap" id="dailyPage" style="display:none"></div>
   <div class="wrap" id="tasksPage" style="display:none"></div>
   <div class="wrap" id="uploadPage" style="display:none"></div>
+  <div class="wrap" id="closuresPage" style="display:none"></div>
 
   <div class="toast" id="toast"></div>
 
@@ -363,13 +370,14 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.5';
+  var VERSION = 'v2.7';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
   var ALL = [];
   var DISPATCHES = {}; // keyed by po_id
   var DAILY_WORK = []; // all daily work entries
+  var CLOSURE_REQUESTS = []; // all PO closure requests
   var FILTER = 'all';
   var QUERY = '';
   var REP_FILTER = ''; // manager: '' = all, '__unassigned__', or a rep name
@@ -824,10 +832,12 @@
     Promise.all([
       fetch(API + '?action=getPOs').then(function(r){return r.json();}),
       fetch(API + '?action=getDispatches').then(function(r){return r.json();}).catch(function(){return {};}),
-      fetch(API + '?action=getDailyWork').then(function(r){return r.json();}).catch(function(){return [];})
+      fetch(API + '?action=getDailyWork').then(function(r){return r.json();}).catch(function(){return [];}),
+      fetch(API + '?action=getClosureRequests').then(function(r){return r.json();}).catch(function(){return [];})
     ]).then(function(results){
       DISPATCHES = results[1] || {};
       DAILY_WORK = results[2] || [];
+      CLOSURE_REQUESTS = results[3] || [];
       onData(results[0]);
     }).catch(onErr);
   }
@@ -896,6 +906,10 @@
     if(norm(p.delivery_status)==='delivered') return '<span class="pill s-deliv">Delivered</span>';
     return '<span class="pill s-pend">Delivery pending</span>';
   }
+  function closedPill(p){
+    if(norm(p.closure_status)!=='closed') return '';
+    return '<span class="pill" style="background:var(--danger-soft);color:var(--danger)">Closed'+(p.closure_reason?(' — '+esc(p.closure_reason)):'')+'</span>';
+  }
   // ---- processing stage ----
   var STAGES = [
     {v:'',            l:'Open'},
@@ -948,7 +962,7 @@
       +   (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +   ageTxt
       + '</div>'
-      + '<div class="status">'+firmPill(p)+stagePill(p)+dispatchPill(p)+deliveryPill(p)+(norm(p.manager_note)?'<span class="pill p-note">Note</span>':'')+(isArchived(p)?'<span class="pill s-arch">Archived</span>':'')+'</div>'
+      + '<div class="status">'+firmPill(p)+stagePill(p)+dispatchPill(p)+deliveryPill(p)+closedPill(p)+(norm(p.manager_note)?'<span class="pill p-note">Note</span>':'')+(isArchived(p)?'<span class="pill s-arch">Archived</span>':'')+'</div>'
       + '<div class="foot">'+who+'<div class="links">'+poCopy+'<button class="btn go" onclick="openDetail(\''+esc(p.po_id)+'\')">View details →</button></div></div>'
       + '</div>';
   }
@@ -969,8 +983,12 @@
       document.getElementById('count').textContent = hits.length ? (hits.length+' result'+(hits.length===1?'':'s')+' · incl. archived') : '';
       return;
     }
-    var base = scoped.filter(function(p){return !isArchived(p);});
+    var base = scoped.filter(function(p){return !isArchived(p) && norm(p.closure_status)!=='closed';});
     var f = FILTERS.filter(function(x){return x.key===FILTER;})[0] || FILTERS[0];
+    if (f.key === 'closed') {
+      // Closed filter explicitly looks at closed POs, ignoring the exclusion above
+      base = scoped.filter(function(p){return !isArchived(p);});
+    }
     var rows = base.filter(f.test);
     if(!base.length){ el.innerHTML='<div class="state">'+(isManager()?'No current orders. Older ones are archived — use the search above to find them.':'Nothing assigned to you yet.')+'</div>'; document.getElementById('count').textContent=''; return; }
     if(!rows.length){ el.innerHTML='<div class="state">No orders in this filter.</div>'; return; }
@@ -981,8 +999,9 @@
 
   function renderChips(){
     var base = scopedRows().filter(function(p){return !isArchived(p);});
+    var baseExclClosed = base.filter(function(p){return norm(p.closure_status)!=='closed';});
     document.getElementById('chips').innerHTML = FILTERS.map(function(f){
-      var n = base.filter(f.test).length;
+      var n = (f.key === 'closed' ? base : baseExclClosed).filter(f.test).length;
       return '<button class="chip'+(f.key===FILTER?' on':'')+'" onclick="setFilter(\''+f.key+'\')">'+f.label+' <span class="n">'+n+'</span></button>';
     }).join('');
   }
@@ -1064,8 +1083,10 @@
   var VIEW = 'orders';
   function renderNav(){
     var el=document.getElementById('nav'); if(!el) return;
+    var pendingCount = CLOSURE_REQUESTS.filter(function(r){ return norm(r.status)==='pending'; }).length;
+    var closureTabLabel = 'Closure Requests' + (pendingCount ? ' <span class="navbadge">'+pendingCount+'</span>' : '');
     var tabs = isManager()
-      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO']]
+      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['closures',closureTabLabel]]
       : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO']];
     el.innerHTML = tabs.map(function(t){
       return '<button class="navtab'+(VIEW===t[0]?' on':'')+'" onclick="showView(\''+t[0]+'\')">'+t[1]+'</button>';
@@ -1078,9 +1099,11 @@
     document.getElementById('dailyPage').style.display = (v==='daily') ?'':'none';
     document.getElementById('tasksPage').style.display = (v==='tasks') ?'':'none';
     document.getElementById('uploadPage').style.display = (v==='upload') ?'':'none';
+    document.getElementById('closuresPage').style.display = (v==='closures') ?'':'none';
     if(v==='daily') renderDaily();
     if(v==='tasks') renderTasksPage();
     if(v==='upload') renderUploadPage();
+    if(v==='closures') renderClosuresPage();
     renderNav();
     window.scrollTo(0,0);
   }
@@ -1187,6 +1210,184 @@
       }
     }
     return '<button class="btn go" onclick="openDWModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')">+ Daily work</button>';
+  }
+
+  // Closure button: rep sees "Request closure" (or pending-state), manager sees "Close PO" directly
+  var CLOSURE_REASONS = ['Unavailability of items', 'Cost hike post-PO', 'Order cancelled', 'Mutually-agreed short-closure', 'Others'];
+
+  function renderClosuresPage(){
+    var el = document.getElementById('closuresPage'); if(!el) return;
+    var pending = CLOSURE_REQUESTS.filter(function(r){ return norm(r.status)==='pending'; });
+    var decided = CLOSURE_REQUESTS.filter(function(r){ return norm(r.status)!=='pending'; })
+      .sort(function(a,b){ return new Date(b.decided_at||b.requested_at) - new Date(a.decided_at||a.requested_at); });
+
+    function reqTile(r) {
+      var po = ALL.find(function(p){ return p.po_id === r.po_id; });
+      var poLabel = po ? (esc(po.po_number)+' · '+esc(po.customer_name)) : esc(r.po_id);
+      var poTitle = po ? esc(po.title||'') : '';
+      var statusPill = norm(r.status)==='pending'
+        ? '<span class="pill" style="background:var(--warn-soft);color:var(--warn)">Pending</span>'
+        : norm(r.status)==='approved'
+          ? '<span class="pill s-deliv">Approved</span>'
+          : '<span class="pill" style="background:var(--danger-soft);color:var(--danger)">Rejected</span>';
+
+      return '<div class="tile" onclick="openDetail(\''+esc(r.po_id)+'\')" style="cursor:pointer">'
+        + '<div class="t-top"><div style="min-width:0">'
+        + '<div class="t-title">'+poTitle+'</div>'
+        + '<div class="t-sub mono">'+poLabel+'</div>'
+        + '</div>'+statusPill+'</div>'
+        + '<div class="status" style="margin-top:8px"><span class="pill" style="background:var(--slate-soft);color:var(--slate)">'+esc(r.requested_by)+'</span></div>'
+        + '<div class="t-sub" style="margin-top:8px">'+esc(r.reason)+(r.remarks?(' — '+esc(r.remarks)):'')+'</div>'
+        + (norm(r.status)!=='pending' && r.decided_by ? '<div class="t-sub" style="margin-top:4px;color:var(--faint)">Decided by '+esc(r.decided_by)+'</div>' : '')
+        + (norm(r.status)==='rejected' && r.deny_reason ? '<div class="t-sub" style="margin-top:4px;color:var(--danger)">Denied: '+esc(r.deny_reason)+'</div>' : '')
+        + '<div class="foot" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--line)"><div></div><div class="links">'
+        + '<button class="btn go" onclick="event.stopPropagation();openDetail(\''+esc(r.po_id)+'\')">View details →</button>'
+        + '</div></div>'
+        + '</div>';
+    }
+
+    var html = '<div class="head"><h1>Closure requests</h1><span class="count">'+pending.length+' pending</span></div>';
+    html += '<div class="sec"><div class="sec-h"><h2>Pending</h2><span class="c">'+pending.length+'</span></div>'
+      + (pending.length ? pending.map(reqTile).join('') : '<div class="empty">No pending closure requests.</div>')+'</div>';
+
+    if (decided.length) {
+      html += '<div class="sec"><div class="sec-h"><h2>Recently decided</h2><span class="c">'+decided.length+'</span></div>'
+        + decided.slice(0,20).map(reqTile).join('')+'</div>';
+    }
+
+    el.innerHTML = html;
+  }
+
+  function closureBtn(p) {
+    if (!ME) return '';
+    if (norm(p.closure_status) === 'closed') return ''; // already closed, no button needed
+
+    var pendingReq = CLOSURE_REQUESTS.find(function(r){ return r.po_id === p.po_id && norm(r.status) === 'pending'; });
+
+    if (ME.role === 'manager') {
+      if (pendingReq) {
+        return '<button class="btn" onclick="openClosureDecisionModal(\''+esc(pendingReq.request_id)+'\',\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')" style="color:var(--warn)">⚠ Closure requested</button>';
+      }
+      return '<button class="btn" onclick="openClosureModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\',false)">Close PO</button>';
+    }
+
+    // Rep view
+    if (pendingReq) {
+      return '<button class="btn" disabled style="color:var(--warn)">Closure requested</button>';
+    }
+    return '<button class="btn" onclick="openClosureModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\',true)">Request closure</button>';
+  }
+
+  function closureReasonOptions(selected) {
+    return CLOSURE_REASONS.map(function(r){
+      return '<option value="'+esc(r)+'"'+(r===selected?' selected':'')+'>'+esc(r)+'</option>';
+    }).join('');
+  }
+
+  // Open the closure modal — isRequest=true for rep (creates a request),
+  // false for manager (closes immediately)
+  function openClosureModal(poId, poNumber, isRequest) {
+    var html = '<div class="modal-bg" onclick="if(event.target===this)closeClosureModal()" id="closureModalBg">'
+      + '<div class="modal">'
+      + '<h3>'+(isRequest ? 'Request closure' : 'Close PO')+'</h3>'
+      + '<div class="msub">PO '+esc(poNumber)+'</div>'
+      + '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Reason</div>'
+      + '<select id="closureReasonSel" class="assign" style="width:100%;margin-bottom:12px" onchange="toggleClosureOtherField()">'
+      + closureReasonOptions()
+      + '</select>'
+      + '<div id="closureOtherWrap" style="display:none;margin-bottom:12px">'
+      + '<input type="text" id="closureOtherText" class="assign" style="width:100%" placeholder="Specify reason">'
+      + '</div>'
+      + '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Remarks (optional)</div>'
+      + '<textarea id="closureRemarks" class="assign" style="width:100%;min-height:70px" placeholder="Any additional detail"></textarea>'
+      + '<div class="modal-actions" style="margin-top:12px">'
+      + '<button class="btn" onclick="closeClosureModal()">Cancel</button>'
+      + '<button class="btn go" onclick="submitClosure(\''+esc(poId)+'\',\''+esc(poNumber)+'\','+isRequest+')">'+(isRequest?'Submit request':'Close PO')+'</button>'
+      + '</div>'
+      + '</div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  }
+
+  function toggleClosureOtherField() {
+    var sel = document.getElementById('closureReasonSel');
+    document.getElementById('closureOtherWrap').style.display = (sel.value === 'Others') ? '' : 'none';
+  }
+
+  function closeClosureModal() { var el = document.getElementById('closureModalBg'); if(el) el.remove(); }
+
+  function submitClosure(poId, poNumber, isRequest) {
+    var reason = document.getElementById('closureReasonSel').value;
+    if (reason === 'Others') {
+      var otherText = (document.getElementById('closureOtherText').value || '').trim();
+      if (!otherText) { toast('Please specify the reason.'); return; }
+      reason = otherText;
+    }
+    var remarks = (document.getElementById('closureRemarks').value || '').trim();
+    closeClosureModal();
+
+    var action = isRequest ? 'requestPOClosure' : 'closePO';
+    fetch(API, { method:'POST', body: JSON.stringify({ action: action, po_id: poId, reason: reason, remarks: remarks, by: (ME&&ME.name)||'' }) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok) {
+          toast(isRequest ? 'Closure request submitted.' : 'PO closed.');
+          load();
+          if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
+            refreshDetailOpen();
+          }
+        } else { toast('Error: ' + (res.error||'unknown')); }
+      });
+  }
+
+  // Manager decision on a pending closure request (from the detail view)
+  function openClosureDecisionModal(requestId, poId, poNumber) {
+    var reqObj = CLOSURE_REQUESTS.find(function(r){ return r.request_id === requestId; });
+    var html = '<div class="modal-bg" onclick="if(event.target===this)closeClosureModal()" id="closureModalBg">'
+      + '<div class="modal">'
+      + '<h3>Closure request</h3>'
+      + '<div class="msub">PO '+esc(poNumber)+'</div>'
+      + '<div class="mgr-note"><b>Requested by '+esc(reqObj?reqObj.requested_by:'')+'</b>'
+      + '<span>'+esc(reqObj?reqObj.reason:'')+(reqObj&&reqObj.remarks?(' — '+esc(reqObj.remarks)):'')+'</span></div>'
+      + '<div id="denyReasonWrap" style="display:none;margin-top:12px">'
+      + '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Reason for denying</div>'
+      + '<textarea id="denyReasonText" class="assign" style="width:100%;min-height:60px" placeholder="Explain why this closure request is being denied"></textarea>'
+      + '</div>'
+      + '<div class="modal-actions" style="margin-top:12px">'
+      + '<button class="btn" onclick="showDenyReasonField(\''+esc(requestId)+'\')">Deny</button>'
+      + '<button class="btn go" onclick="decideClosure(\''+esc(requestId)+'\',\'Approved\',\'\')">Approve & close</button>'
+      + '</div>'
+      + '</div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  }
+
+  function showDenyReasonField(requestId) {
+    var wrap = document.getElementById('denyReasonWrap');
+    if (wrap.style.display === 'none') {
+      wrap.style.display = '';
+      // Swap the Deny button to a confirm button once reason field is visible
+      var actions = wrap.parentElement.querySelector('.modal-actions');
+      actions.innerHTML = '<button class="btn" onclick="closeClosureModal()">Cancel</button>'
+        + '<button class="btn go" onclick="confirmDenyClosure(\''+esc(requestId)+'\')">Confirm denial</button>';
+    }
+  }
+
+  function confirmDenyClosure(requestId) {
+    var reason = (document.getElementById('denyReasonText').value || '').trim();
+    if (!reason) { toast('Please provide a reason for denying this request.'); return; }
+    decideClosure(requestId, 'Rejected', reason);
+  }
+
+  function decideClosure(requestId, decision, denyReason) {
+    closeClosureModal();
+    fetch(API, { method:'POST', body: JSON.stringify({ action: 'decideClosureRequest', request_id: requestId, decision: decision, deny_reason: denyReason||'', by: (ME&&ME.name)||'' }) })
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok) {
+          toast(decision === 'Approved' ? 'PO closed.' : 'Closure request denied.');
+          load();
+          if (VIEW === 'closures') renderClosuresPage();
+        } else { toast('Error: ' + (res.error||'unknown')); }
+      });
   }
 
   // Open the Add to Daily Work modal
@@ -1629,8 +1830,8 @@
       +     (p.delivery_location?'<span>'+ICON('pin')+esc(p.delivery_location)+'</span>':'')
       +     ageTxt
       +   '</div>'
-      +   '<div class="status">'+firmPill(p)+stagePill(p)+dispatchPill(p)+deliveryPill(p)+'</div>'
-      +   '<div class="foot">'+who+'<div class="links">'+poCopy+dwBtn(p)+'</div></div>'
+      +   '<div class="status">'+firmPill(p)+stagePill(p)+dispatchPill(p)+deliveryPill(p)+closedPill(p)+'</div>'
+      +   '<div class="foot">'+who+'<div class="links">'+poCopy+dwBtn(p)+closureBtn(p)+'</div></div>'
       + '</div>'
       + (norm(p.manager_note) ? '<div class="mgr-note"><b>Manager\u2019s note</b><span>'+esc(p.manager_note)+'</span></div>' : '')
       + (norm(p.dispatch_status)!=='dispatched' ? '<div class="sec"><div class="sec-h"><h2>Processing stage</h2></div>'
