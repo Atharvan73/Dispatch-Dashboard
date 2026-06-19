@@ -26,9 +26,11 @@
         filters; My Daily Work shows the user's tasks + assigned orders.
   v2.0  GeM / IREPS orders included, with a firm tag (Shakti / Universal) and a
         firm filter; channel pill (GeM / IREPS) on each order.
-  v2.4  "Add to Daily Work" button on PO detail (rep adds self, manager picks rep);
-        My Daily Work page shows today's + upcoming work entries with reschedule;
-        midnight carry-forward trigger in backend.
+  v2.5  Offline PO upload: rep/manager can upload a PDF or photo of a PO
+        received outside email (WhatsApp, in-person, etc). AI extracts the
+        data, checks for duplicates (same PO number + same customer), and
+        warns with override-reason flow before saving. Tagged as
+        "Offline PO" source with uploaded_by recorded.
 -->
 <html>
 <head>
@@ -353,6 +355,7 @@
   <div class="wrap" id="detail" style="display:none"></div>
   <div class="wrap" id="dailyPage" style="display:none"></div>
   <div class="wrap" id="tasksPage" style="display:none"></div>
+  <div class="wrap" id="uploadPage" style="display:none"></div>
 
   <div class="toast" id="toast"></div>
 
@@ -360,7 +363,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.4';
+  var VERSION = 'v2.5';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -1062,8 +1065,8 @@
   function renderNav(){
     var el=document.getElementById('nav'); if(!el) return;
     var tabs = isManager()
-      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks']]
-      : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks']];
+      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO']]
+      : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO']];
     el.innerHTML = tabs.map(function(t){
       return '<button class="navtab'+(VIEW===t[0]?' on':'')+'" onclick="showView(\''+t[0]+'\')">'+t[1]+'</button>';
     }).join('');
@@ -1074,8 +1077,10 @@
     document.getElementById('board').style.display     = (v==='orders')?'':'none';
     document.getElementById('dailyPage').style.display = (v==='daily') ?'':'none';
     document.getElementById('tasksPage').style.display = (v==='tasks') ?'':'none';
+    document.getElementById('uploadPage').style.display = (v==='upload') ?'':'none';
     if(v==='daily') renderDaily();
     if(v==='tasks') renderTasksPage();
+    if(v==='upload') renderUploadPage();
     renderNav();
     window.scrollTo(0,0);
   }
@@ -1272,6 +1277,185 @@
             if (po) document.getElementById('detailPage').innerHTML = detailHtml(po);
           }
         } else { toast('Error: ' + (res.error||'unknown')); }
+      });
+  }
+
+  /* ---- Offline PO upload ---- */
+
+  var UPLOAD_STATE = { file: null, base64: null, mimeType: null, extracted: null, duplicateInfo: null };
+
+  function renderUploadPage(){
+    var el = document.getElementById('uploadPage'); if(!el) return;
+    UPLOAD_STATE = { file: null, base64: null, mimeType: null, extracted: null, duplicateInfo: null };
+
+    var html = '<div class="head"><h1>Upload PO</h1></div>';
+    html += '<div class="sec"><div class="sec-h"><h2>Manually add a PO received offline</h2></div>';
+    html += '<div class="empty" style="text-align:left;line-height:1.5">'
+      + 'Use this when a customer sends a PO over WhatsApp, in person, or any other way outside email. '
+      + 'Upload the PDF or photo below — the system will read it automatically and check it isn\'t already in the dashboard before adding it.'
+      + '</div>';
+
+    html += '<div style="margin-top:16px;border:2px dashed var(--line);border-radius:12px;padding:32px;text-align:center" id="uploadDropZone">'
+      + '<input type="file" id="uploadFileInput" accept="application/pdf,image/*" style="display:none" onchange="onUploadFileSelected(event)">'
+      + '<div id="uploadPrompt">'
+      + '<div style="font-size:14px;color:var(--muted);margin-bottom:12px">PDF or photo of the PO</div>'
+      + '<button class="btn go" onclick="document.getElementById(\'uploadFileInput\').click()">Choose file</button>'
+      + '</div>'
+      + '<div id="uploadProgress" style="display:none">'
+      + '<div style="font-size:14px;color:var(--muted)">Reading PO with AI — this can take up to 15 seconds…</div>'
+      + '</div>'
+      + '</div>';
+
+    html += '<div id="uploadResult" style="margin-top:16px"></div>';
+    html += '</div>';
+    el.innerHTML = html;
+  }
+
+  function onUploadFileSelected(event){
+    var file = event.target.files[0];
+    if (!file) return;
+    UPLOAD_STATE.file = file;
+    UPLOAD_STATE.mimeType = file.type || 'application/pdf';
+
+    document.getElementById('uploadPrompt').style.display = 'none';
+    document.getElementById('uploadProgress').style.display = '';
+    document.getElementById('uploadResult').innerHTML = '';
+
+    var reader = new FileReader();
+    reader.onload = function(e){
+      var base64 = e.target.result.split(',')[1];
+      UPLOAD_STATE.base64 = base64;
+      extractUploadedPO();
+    };
+    reader.onerror = function(){
+      toast('Could not read the file. Please try again.');
+      resetUploadDropZone();
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function resetUploadDropZone(){
+    document.getElementById('uploadPrompt').style.display = '';
+    document.getElementById('uploadProgress').style.display = 'none';
+  }
+
+  function extractUploadedPO(){
+    fetch(API, { method:'POST', body: JSON.stringify({
+      action: 'extractOfflinePO',
+      fileBase64: UPLOAD_STATE.base64,
+      mimeType: UPLOAD_STATE.mimeType
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        resetUploadDropZone();
+        if (!res.ok) {
+          document.getElementById('uploadResult').innerHTML =
+            '<div class="empty" style="color:var(--danger)">Could not read this PO: '+esc(res.error||'unknown error')+'. Try a clearer photo or a different file.</div>';
+          return;
+        }
+        if (res.data.isValidCustomerPO === false) {
+          document.getElementById('uploadResult').innerHTML =
+            '<div class="empty" style="color:var(--danger)">This doesn\'t look like a customer PO: '+esc(res.data.rejectionReason||'')+'. If this is wrong, try uploading again or contact your manager.</div>';
+          return;
+        }
+        UPLOAD_STATE.extracted = res.data;
+        checkUploadDuplicate();
+      })
+      .catch(function(){
+        resetUploadDropZone();
+        toast('Something went wrong reading the PO. Please try again.');
+      });
+  }
+
+  function checkUploadDuplicate(){
+    var d = UPLOAD_STATE.extracted;
+    fetch(API, { method:'POST', body: JSON.stringify({
+      action: 'checkPODuplicate',
+      po_number: d.poNumber,
+      customer_name: d.customerName
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        UPLOAD_STATE.duplicateInfo = res.duplicate ? res.existingPO : null;
+        renderUploadPreview();
+      })
+      .catch(function(){
+        UPLOAD_STATE.duplicateInfo = null;
+        renderUploadPreview();
+      });
+  }
+
+  function renderUploadPreview(){
+    var d = UPLOAD_STATE.extracted;
+    var dup = UPLOAD_STATE.duplicateInfo;
+
+    var itemsHtml = (d.items||[]).map(function(it,idx){
+      return '<div class="t-sub" style="padding:4px 0">'+(idx+1)+'. '+esc(it.itemDescription||'')+' — '+esc(it.poQty||'')+' '+esc(it.uom||'')+' @ ₹'+esc(it.price||'')+'</div>';
+    }).join('');
+
+    var html = '<div class="tile" style="cursor:default">'
+      + '<div class="t-top"><div style="min-width:0">'
+      + '<div class="t-title">'+esc(d.title||'Untitled PO')+'</div>'
+      + '<div class="t-sub"><span class="mono">'+esc(d.poNumber||'No PO number found')+'</span> · '+esc(d.customerName||'Unknown customer')+'</div>'
+      + '</div></div>'
+      + '<div class="t-sub" style="margin-top:8px">'+esc(d.siteAddress||'')+'</div>'
+      + '<div class="t-sub">PO dated '+esc(d.poDate||'unknown')+(d.deliveryTerm?' · '+esc(d.deliveryTerm):'')+'</div>'
+      + '<div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--line)">'+itemsHtml+'</div>'
+      + '</div>';
+
+    if (dup) {
+      html += '<div class="mgr-note" style="margin-top:12px"><b>⚠ This PO already exists in the system</b>'
+        + '<span>PO '+esc(dup.po_number)+' for '+esc(dup.customer_name)+' — "'+esc(dup.title)+'" (dated '+esc(dup.po_date)+', status: '+esc(dup.dispatch_status)+').</span></div>';
+      html += '<div style="margin-top:12px" id="overrideReasonBlock">'
+        + '<div style="font-size:13px;font-weight:500;margin-bottom:6px">If this is genuinely a different/new PO, explain why before proceeding:</div>'
+        + '<textarea id="uploadOverrideReason" class="assign" style="width:100%;min-height:60px" placeholder="e.g. this is a separate repeat order, different items than before"></textarea>'
+        + '</div>';
+      html += '<div class="modal-actions" style="margin-top:12px">'
+        + '<button class="btn" onclick="renderUploadPage()">Cancel</button>'
+        + '<button class="btn go" onclick="submitUploadPO(true)">Proceed anyway</button>'
+        + '</div>';
+    } else {
+      html += '<div class="modal-actions" style="margin-top:12px">'
+        + '<button class="btn" onclick="renderUploadPage()">Cancel</button>'
+        + '<button class="btn go" onclick="submitUploadPO(false)">Confirm & add PO</button>'
+        + '</div>';
+    }
+
+    document.getElementById('uploadResult').innerHTML = html;
+  }
+
+  function submitUploadPO(isOverride){
+    var overrideReason = '';
+    if (isOverride) {
+      overrideReason = (document.getElementById('uploadOverrideReason').value || '').trim();
+      if (!overrideReason) { toast('Please explain why you\'re proceeding despite the duplicate.'); return; }
+    }
+
+    document.getElementById('uploadResult').innerHTML = '<div class="empty">Saving PO…</div>';
+
+    fetch(API, { method:'POST', body: JSON.stringify({
+      action: 'saveOfflinePO',
+      data: UPLOAD_STATE.extracted,
+      fileBase64: UPLOAD_STATE.base64,
+      mimeType: UPLOAD_STATE.mimeType,
+      fileName: UPLOAD_STATE.file ? UPLOAD_STATE.file.name : 'offline_po',
+      uploaded_by: (ME && ME.name) || '',
+      override_reason: overrideReason
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok) {
+          toast('PO added successfully.');
+          renderUploadPage();
+          load(); // refresh ALL so the new PO shows on the board
+        } else {
+          toast('Error: ' + (res.error||'unknown'));
+          renderUploadPreview();
+        }
+      })
+      .catch(function(){
+        toast('Something went wrong saving the PO.');
+        renderUploadPreview();
       });
   }
 
