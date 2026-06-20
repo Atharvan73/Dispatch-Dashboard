@@ -35,6 +35,11 @@
         listing all rep closure requests as tiles (View details → opens the
         PO). Denying a request now requires a typed reason, stored and shown
         alongside the request.
+  v2.8  Rep view of Closure Requests tab (own requests only, badge counts own
+        pending). Full reopen flow built in frontend: manager can reopen a
+        closed PO directly with a reason, rep can request reopening for
+        manager approval/denial. PO detail shows a closure history trail
+        (closed by/on/reason, reopened by/on/reason) even after reopening.
 -->
 <html>
 <head>
@@ -370,7 +375,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.7';
+  var VERSION = 'v2.8';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -910,6 +915,23 @@
     if(norm(p.closure_status)!=='closed') return '';
     return '<span class="pill" style="background:var(--danger-soft);color:var(--danger)">Closed'+(p.closure_reason?(' — '+esc(p.closure_reason)):'')+'</span>';
   }
+  function closureHistoryBlock(p){
+    // Shows a small trail if the PO has ever been closed and/or reopened —
+    // visible even after reopening, since closed_by/closed_at/closure_reason
+    // are preserved as history rather than cleared.
+    var hasClosedHistory = p.closed_by || p.closed_at || p.closure_reason;
+    var hasReopenedHistory = p.reopened_by || p.reopened_at || p.reopen_reason;
+    if (!hasClosedHistory && !hasReopenedHistory) return '';
+
+    var lines = [];
+    if (hasClosedHistory) {
+      lines.push('<div>Closed'+(p.closed_by?(' by '+esc(p.closed_by)):'')+(p.closed_at?(' on '+esc(p.closed_at)):'')+(p.closure_reason?(' — '+esc(p.closure_reason)):'')+'</div>');
+    }
+    if (hasReopenedHistory) {
+      lines.push('<div>Reopened'+(p.reopened_by?(' by '+esc(p.reopened_by)):'')+(p.reopened_at?(' on '+esc(p.reopened_at)):'')+(p.reopen_reason?(' — '+esc(p.reopen_reason)):'')+'</div>');
+    }
+    return '<div class="mgr-note" style="background:var(--slate-soft);border-color:#cdd6e3"><b style="color:var(--slate)">Closure history</b><span style="display:flex;flex-direction:column;gap:2px">'+lines.join('')+'</span></div>';
+  }
   // ---- processing stage ----
   var STAGES = [
     {v:'',            l:'Open'},
@@ -1083,11 +1105,13 @@
   var VIEW = 'orders';
   function renderNav(){
     var el=document.getElementById('nav'); if(!el) return;
-    var pendingCount = CLOSURE_REQUESTS.filter(function(r){ return norm(r.status)==='pending'; }).length;
+    var pendingCount = CLOSURE_REQUESTS.filter(function(r){
+      return norm(r.status)==='pending' && (isManager() || norm(r.requested_by)===norm(ME&&ME.name));
+    }).length;
     var closureTabLabel = 'Closure Requests' + (pendingCount ? ' <span class="navbadge">'+pendingCount+'</span>' : '');
     var tabs = isManager()
       ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['closures',closureTabLabel]]
-      : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO']];
+      : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['closures',closureTabLabel]];
     el.innerHTML = tabs.map(function(t){
       return '<button class="navtab'+(VIEW===t[0]?' on':'')+'" onclick="showView(\''+t[0]+'\')">'+t[1]+'</button>';
     }).join('');
@@ -1217,8 +1241,11 @@
 
   function renderClosuresPage(){
     var el = document.getElementById('closuresPage'); if(!el) return;
-    var pending = CLOSURE_REQUESTS.filter(function(r){ return norm(r.status)==='pending'; });
-    var decided = CLOSURE_REQUESTS.filter(function(r){ return norm(r.status)!=='pending'; })
+    var mgr = isManager();
+    var myRequests = mgr ? CLOSURE_REQUESTS : CLOSURE_REQUESTS.filter(function(r){ return norm(r.requested_by)===norm(ME&&ME.name); });
+
+    var pending = myRequests.filter(function(r){ return norm(r.status)==='pending'; });
+    var decided = myRequests.filter(function(r){ return norm(r.status)!=='pending'; })
       .sort(function(a,b){ return new Date(b.decided_at||b.requested_at) - new Date(a.decided_at||a.requested_at); });
 
     function reqTile(r) {
@@ -1230,13 +1257,16 @@
         : norm(r.status)==='approved'
           ? '<span class="pill s-deliv">Approved</span>'
           : '<span class="pill" style="background:var(--danger-soft);color:var(--danger)">Rejected</span>';
+      var typeTag = norm(r.type)==='reopen'
+        ? '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">Reopen request</span>'
+        : '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">Closure request</span>';
 
       return '<div class="tile" onclick="openDetail(\''+esc(r.po_id)+'\')" style="cursor:pointer">'
         + '<div class="t-top"><div style="min-width:0">'
         + '<div class="t-title">'+poTitle+'</div>'
         + '<div class="t-sub mono">'+poLabel+'</div>'
         + '</div>'+statusPill+'</div>'
-        + '<div class="status" style="margin-top:8px"><span class="pill" style="background:var(--slate-soft);color:var(--slate)">'+esc(r.requested_by)+'</span></div>'
+        + '<div class="status" style="margin-top:8px">'+typeTag+(mgr?('<span class="pill" style="background:var(--slate-soft);color:var(--slate)">'+esc(r.requested_by)+'</span>'):'')+'</div>'
         + '<div class="t-sub" style="margin-top:8px">'+esc(r.reason)+(r.remarks?(' — '+esc(r.remarks)):'')+'</div>'
         + (norm(r.status)!=='pending' && r.decided_by ? '<div class="t-sub" style="margin-top:4px;color:var(--faint)">Decided by '+esc(r.decided_by)+'</div>' : '')
         + (norm(r.status)==='rejected' && r.deny_reason ? '<div class="t-sub" style="margin-top:4px;color:var(--danger)">Denied: '+esc(r.deny_reason)+'</div>' : '')
@@ -1248,7 +1278,7 @@
 
     var html = '<div class="head"><h1>Closure requests</h1><span class="count">'+pending.length+' pending</span></div>';
     html += '<div class="sec"><div class="sec-h"><h2>Pending</h2><span class="c">'+pending.length+'</span></div>'
-      + (pending.length ? pending.map(reqTile).join('') : '<div class="empty">No pending closure requests.</div>')+'</div>';
+      + (pending.length ? pending.map(reqTile).join('') : '<div class="empty">No pending requests'+(mgr?'.':' from you.')+'</div>')+'</div>';
 
     if (decided.length) {
       html += '<div class="sec"><div class="sec-h"><h2>Recently decided</h2><span class="c">'+decided.length+'</span></div>'
@@ -1260,22 +1290,38 @@
 
   function closureBtn(p) {
     if (!ME) return '';
-    if (norm(p.closure_status) === 'closed') return ''; // already closed, no button needed
 
-    var pendingReq = CLOSURE_REQUESTS.find(function(r){ return r.po_id === p.po_id && norm(r.status) === 'pending'; });
+    var pendingCloseReq  = CLOSURE_REQUESTS.find(function(r){ return r.po_id === p.po_id && norm(r.status) === 'pending' && norm(r.request_type) !== 'reopen'; });
+    var pendingReopenReq = CLOSURE_REQUESTS.find(function(r){ return r.po_id === p.po_id && norm(r.status) === 'pending' && norm(r.request_type) === 'reopen'; });
 
-    if (ME.role === 'manager') {
-      if (pendingReq) {
-        return '<button class="btn" onclick="openClosureDecisionModal(\''+esc(pendingReq.request_id)+'\',\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')" style="color:var(--warn)">⚠ Closure requested</button>';
+    if (norm(p.closure_status) === 'closed') {
+      // PO is closed — show reopen options instead
+      if (ME.role === 'manager') {
+        if (pendingReopenReq) {
+          return '<button class="btn" onclick="openClosureDecisionModal(\''+esc(pendingReopenReq.request_id)+'\',\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')" style="color:var(--warn)">⚠ Reopen requested</button>';
+        }
+        return '<button class="btn" onclick="openClosureModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\',false,true)">Reopen PO</button>';
       }
-      return '<button class="btn" onclick="openClosureModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\',false)">Close PO</button>';
+      // Rep view
+      if (pendingReopenReq) {
+        return '<button class="btn" disabled style="color:var(--warn)">Reopen requested</button>';
+      }
+      return '<button class="btn" onclick="openClosureModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\',true,true)">Request reopen</button>';
+    }
+
+    // PO is open — normal closure flow
+    if (ME.role === 'manager') {
+      if (pendingCloseReq) {
+        return '<button class="btn" onclick="openClosureDecisionModal(\''+esc(pendingCloseReq.request_id)+'\',\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')" style="color:var(--warn)">⚠ Closure requested</button>';
+      }
+      return '<button class="btn" onclick="openClosureModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\',false,false)">Close PO</button>';
     }
 
     // Rep view
-    if (pendingReq) {
+    if (pendingCloseReq) {
       return '<button class="btn" disabled style="color:var(--warn)">Closure requested</button>';
     }
-    return '<button class="btn" onclick="openClosureModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\',true)">Request closure</button>';
+    return '<button class="btn" onclick="openClosureModal(\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\',true,false)">Request closure</button>';
   }
 
   function closureReasonOptions(selected) {
@@ -1284,25 +1330,32 @@
     }).join('');
   }
 
-  // Open the closure modal — isRequest=true for rep (creates a request),
-  // false for manager (closes immediately)
-  function openClosureModal(poId, poNumber, isRequest) {
+  // Open the closure/reopen modal — isRequest=true for rep (creates a
+  // request), false for manager (applies immediately). isReopen=true for
+  // reopening a closed PO, false for the normal closure flow.
+  function openClosureModal(poId, poNumber, isRequest, isReopen) {
+    var title = isReopen ? (isRequest ? 'Request reopen' : 'Reopen PO') : (isRequest ? 'Request closure' : 'Close PO');
+    var reasonField = isReopen
+      ? '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Reason for reopening</div>'
+        + '<textarea id="closureOtherText" class="assign" style="width:100%;min-height:60px" placeholder="e.g. customer wants to proceed after all, mutually agreed to resume"></textarea>'
+      : '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Reason</div>'
+        + '<select id="closureReasonSel" class="assign" style="width:100%;margin-bottom:12px" onchange="toggleClosureOtherField()">'
+        + closureReasonOptions()
+        + '</select>'
+        + '<div id="closureOtherWrap" style="display:none;margin-bottom:12px">'
+        + '<input type="text" id="closureOtherTextInput" class="assign" style="width:100%" placeholder="Specify reason">'
+        + '</div>';
+
     var html = '<div class="modal-bg" onclick="if(event.target===this)closeClosureModal()" id="closureModalBg">'
       + '<div class="modal">'
-      + '<h3>'+(isRequest ? 'Request closure' : 'Close PO')+'</h3>'
+      + '<h3>'+title+'</h3>'
       + '<div class="msub">PO '+esc(poNumber)+'</div>'
-      + '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Reason</div>'
-      + '<select id="closureReasonSel" class="assign" style="width:100%;margin-bottom:12px" onchange="toggleClosureOtherField()">'
-      + closureReasonOptions()
-      + '</select>'
-      + '<div id="closureOtherWrap" style="display:none;margin-bottom:12px">'
-      + '<input type="text" id="closureOtherText" class="assign" style="width:100%" placeholder="Specify reason">'
-      + '</div>'
-      + '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Remarks (optional)</div>'
+      + reasonField
+      + '<div style="margin-bottom:4px;font-size:13px;font-weight:500;margin-top:'+(isReopen?'12px':'0')+'">Remarks (optional)</div>'
       + '<textarea id="closureRemarks" class="assign" style="width:100%;min-height:70px" placeholder="Any additional detail"></textarea>'
       + '<div class="modal-actions" style="margin-top:12px">'
       + '<button class="btn" onclick="closeClosureModal()">Cancel</button>'
-      + '<button class="btn go" onclick="submitClosure(\''+esc(poId)+'\',\''+esc(poNumber)+'\','+isRequest+')">'+(isRequest?'Submit request':'Close PO')+'</button>'
+      + '<button class="btn go" onclick="submitClosure(\''+esc(poId)+'\',\''+esc(poNumber)+'\','+isRequest+','+isReopen+')">'+(isRequest?'Submit request':title)+'</button>'
       + '</div>'
       + '</div></div>';
     document.body.insertAdjacentHTML('beforeend', html);
@@ -1315,22 +1368,31 @@
 
   function closeClosureModal() { var el = document.getElementById('closureModalBg'); if(el) el.remove(); }
 
-  function submitClosure(poId, poNumber, isRequest) {
-    var reason = document.getElementById('closureReasonSel').value;
-    if (reason === 'Others') {
-      var otherText = (document.getElementById('closureOtherText').value || '').trim();
-      if (!otherText) { toast('Please specify the reason.'); return; }
-      reason = otherText;
+  function submitClosure(poId, poNumber, isRequest, isReopen) {
+    var reason;
+    if (isReopen) {
+      reason = (document.getElementById('closureOtherText').value || '').trim();
+      if (!reason) { toast('Please provide a reason for reopening.'); return; }
+    } else {
+      reason = document.getElementById('closureReasonSel').value;
+      if (reason === 'Others') {
+        var otherText = (document.getElementById('closureOtherTextInput').value || '').trim();
+        if (!otherText) { toast('Please specify the reason.'); return; }
+        reason = otherText;
+      }
     }
     var remarks = (document.getElementById('closureRemarks').value || '').trim();
     closeClosureModal();
 
-    var action = isRequest ? 'requestPOClosure' : 'closePO';
+    var action = isReopen
+      ? (isRequest ? 'requestPOReopen' : 'reopenPO')
+      : (isRequest ? 'requestPOClosure' : 'closePO');
+
     fetch(API, { method:'POST', body: JSON.stringify({ action: action, po_id: poId, reason: reason, remarks: remarks, by: (ME&&ME.name)||'' }) })
       .then(function(r){ return r.json(); })
       .then(function(res){
         if (res.ok) {
-          toast(isRequest ? 'Closure request submitted.' : 'PO closed.');
+          toast(isRequest ? (isReopen?'Reopen request submitted.':'Closure request submitted.') : (isReopen?'PO reopened.':'PO closed.'));
           load();
           if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
             refreshDetailOpen();
@@ -1342,19 +1404,20 @@
   // Manager decision on a pending closure request (from the detail view)
   function openClosureDecisionModal(requestId, poId, poNumber) {
     var reqObj = CLOSURE_REQUESTS.find(function(r){ return r.request_id === requestId; });
+    var isReopen = reqObj && norm(reqObj.request_type) === 'reopen';
     var html = '<div class="modal-bg" onclick="if(event.target===this)closeClosureModal()" id="closureModalBg">'
       + '<div class="modal">'
-      + '<h3>Closure request</h3>'
+      + '<h3>'+(isReopen?'Reopen request':'Closure request')+'</h3>'
       + '<div class="msub">PO '+esc(poNumber)+'</div>'
       + '<div class="mgr-note"><b>Requested by '+esc(reqObj?reqObj.requested_by:'')+'</b>'
       + '<span>'+esc(reqObj?reqObj.reason:'')+(reqObj&&reqObj.remarks?(' — '+esc(reqObj.remarks)):'')+'</span></div>'
       + '<div id="denyReasonWrap" style="display:none;margin-top:12px">'
       + '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Reason for denying</div>'
-      + '<textarea id="denyReasonText" class="assign" style="width:100%;min-height:60px" placeholder="Explain why this closure request is being denied"></textarea>'
+      + '<textarea id="denyReasonText" class="assign" style="width:100%;min-height:60px" placeholder="Explain why this request is being denied"></textarea>'
       + '</div>'
       + '<div class="modal-actions" style="margin-top:12px">'
       + '<button class="btn" onclick="showDenyReasonField(\''+esc(requestId)+'\')">Deny</button>'
-      + '<button class="btn go" onclick="decideClosure(\''+esc(requestId)+'\',\'Approved\',\'\')">Approve & close</button>'
+      + '<button class="btn go" onclick="decideClosure(\''+esc(requestId)+'\',\'Approved\',\'\')">'+(isReopen?'Approve & reopen':'Approve & close')+'</button>'
       + '</div>'
       + '</div></div>';
     document.body.insertAdjacentHTML('beforeend', html);
@@ -1834,6 +1897,7 @@
       +   '<div class="foot">'+who+'<div class="links">'+poCopy+dwBtn(p)+closureBtn(p)+'</div></div>'
       + '</div>'
       + (norm(p.manager_note) ? '<div class="mgr-note"><b>Manager\u2019s note</b><span>'+esc(p.manager_note)+'</span></div>' : '')
+      + closureHistoryBlock(p)
       + (norm(p.dispatch_status)!=='dispatched' ? '<div class="sec"><div class="sec-h"><h2>Processing stage</h2></div>'
       +   '<div class="stage-edit">'
       +     '<select id="stageSel" class="assign">'
