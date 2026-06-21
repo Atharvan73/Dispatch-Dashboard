@@ -40,6 +40,13 @@
         closed PO directly with a reason, rep can request reopening for
         manager approval/denial. PO detail shows a closure history trail
         (closed by/on/reason, reopened by/on/reason) even after reopening.
+  v2.9  Renamed "Closure Requests" to "Approvals" (now covers closure, reopen,
+        AND delivery-without-POD requests). Added real POD upload per invoice
+        (photo/scan, stamps delivered_date), "Mark delivered without POD"
+        request flow (manager-approved, delivery date = request date), and
+        auto-close: once every invoice on a PO is delivered (with or without
+        POD), the PO closes automatically. New closure reason: "Order
+        completed but one or more PODs not available."
 -->
 <html>
 <head>
@@ -367,7 +374,7 @@
   <div class="wrap" id="dailyPage" style="display:none"></div>
   <div class="wrap" id="tasksPage" style="display:none"></div>
   <div class="wrap" id="uploadPage" style="display:none"></div>
-  <div class="wrap" id="closuresPage" style="display:none"></div>
+  <div class="wrap" id="approvalsPage" style="display:none"></div>
 
   <div class="toast" id="toast"></div>
 
@@ -375,14 +382,14 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.8';
+  var VERSION = 'v2.9';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
   var ALL = [];
   var DISPATCHES = {}; // keyed by po_id
   var DAILY_WORK = []; // all daily work entries
-  var CLOSURE_REQUESTS = []; // all PO closure requests
+  var APPROVALS = []; // all approval requests (closure / reopen / delivery-without-POD)
   var FILTER = 'all';
   var QUERY = '';
   var REP_FILTER = ''; // manager: '' = all, '__unassigned__', or a rep name
@@ -838,11 +845,11 @@
       fetch(API + '?action=getPOs').then(function(r){return r.json();}),
       fetch(API + '?action=getDispatches').then(function(r){return r.json();}).catch(function(){return {};}),
       fetch(API + '?action=getDailyWork').then(function(r){return r.json();}).catch(function(){return [];}),
-      fetch(API + '?action=getClosureRequests').then(function(r){return r.json();}).catch(function(){return [];})
+      fetch(API + '?action=getApprovals').then(function(r){return r.json();}).catch(function(){return [];})
     ]).then(function(results){
       DISPATCHES = results[1] || {};
       DAILY_WORK = results[2] || [];
-      CLOSURE_REQUESTS = results[3] || [];
+      APPROVALS = results[3] || [];
       onData(results[0]);
     }).catch(onErr);
   }
@@ -1105,13 +1112,13 @@
   var VIEW = 'orders';
   function renderNav(){
     var el=document.getElementById('nav'); if(!el) return;
-    var pendingCount = CLOSURE_REQUESTS.filter(function(r){
+    var pendingCount = APPROVALS.filter(function(r){
       return norm(r.status)==='pending' && (isManager() || norm(r.requested_by)===norm(ME&&ME.name));
     }).length;
-    var closureTabLabel = 'Closure Requests' + (pendingCount ? ' <span class="navbadge">'+pendingCount+'</span>' : '');
+    var approvalsTabLabel = 'Approvals' + (pendingCount ? ' <span class="navbadge">'+pendingCount+'</span>' : '');
     var tabs = isManager()
-      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['closures',closureTabLabel]]
-      : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['closures',closureTabLabel]];
+      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['approvals',approvalsTabLabel]]
+      : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['approvals',approvalsTabLabel]];
     el.innerHTML = tabs.map(function(t){
       return '<button class="navtab'+(VIEW===t[0]?' on':'')+'" onclick="showView(\''+t[0]+'\')">'+t[1]+'</button>';
     }).join('');
@@ -1123,11 +1130,11 @@
     document.getElementById('dailyPage').style.display = (v==='daily') ?'':'none';
     document.getElementById('tasksPage').style.display = (v==='tasks') ?'':'none';
     document.getElementById('uploadPage').style.display = (v==='upload') ?'':'none';
-    document.getElementById('closuresPage').style.display = (v==='closures') ?'':'none';
+    document.getElementById('approvalsPage').style.display = (v==='approvals') ?'':'none';
     if(v==='daily') renderDaily();
     if(v==='tasks') renderTasksPage();
     if(v==='upload') renderUploadPage();
-    if(v==='closures') renderClosuresPage();
+    if(v==='approvals') renderApprovalsPage();
     renderNav();
     window.scrollTo(0,0);
   }
@@ -1237,12 +1244,12 @@
   }
 
   // Closure button: rep sees "Request closure" (or pending-state), manager sees "Close PO" directly
-  var CLOSURE_REASONS = ['Unavailability of items', 'Cost hike post-PO', 'Order cancelled', 'Mutually-agreed short-closure', 'Others'];
+  var CLOSURE_REASONS = ['Unavailability of items', 'Cost hike post-PO', 'Order cancelled', 'Mutually-agreed short-closure', 'Order completed but one or more PODs not available', 'Others'];
 
-  function renderClosuresPage(){
-    var el = document.getElementById('closuresPage'); if(!el) return;
+  function renderApprovalsPage(){
+    var el = document.getElementById('approvalsPage'); if(!el) return;
     var mgr = isManager();
-    var myRequests = mgr ? CLOSURE_REQUESTS : CLOSURE_REQUESTS.filter(function(r){ return norm(r.requested_by)===norm(ME&&ME.name); });
+    var myRequests = mgr ? APPROVALS : APPROVALS.filter(function(r){ return norm(r.requested_by)===norm(ME&&ME.name); });
 
     var pending = myRequests.filter(function(r){ return norm(r.status)==='pending'; });
     var decided = myRequests.filter(function(r){ return norm(r.status)!=='pending'; })
@@ -1257,9 +1264,12 @@
         : norm(r.status)==='approved'
           ? '<span class="pill s-deliv">Approved</span>'
           : '<span class="pill" style="background:var(--danger-soft);color:var(--danger)">Rejected</span>';
-      var typeTag = norm(r.type)==='reopen'
+      var rt = norm(r.request_type);
+      var typeTag = rt === 'reopen'
         ? '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">Reopen request</span>'
-        : '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">Closure request</span>';
+        : rt === 'deliverywithoutpod'
+          ? '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">Delivery without POD</span>'
+          : '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">Closure request</span>';
 
       return '<div class="tile" onclick="openDetail(\''+esc(r.po_id)+'\')" style="cursor:pointer">'
         + '<div class="t-top"><div style="min-width:0">'
@@ -1276,7 +1286,7 @@
         + '</div>';
     }
 
-    var html = '<div class="head"><h1>Closure requests</h1><span class="count">'+pending.length+' pending</span></div>';
+    var html = '<div class="head"><h1>Approvals</h1><span class="count">'+pending.length+' pending</span></div>';
     html += '<div class="sec"><div class="sec-h"><h2>Pending</h2><span class="c">'+pending.length+'</span></div>'
       + (pending.length ? pending.map(reqTile).join('') : '<div class="empty">No pending requests'+(mgr?'.':' from you.')+'</div>')+'</div>';
 
@@ -1291,8 +1301,8 @@
   function closureBtn(p) {
     if (!ME) return '';
 
-    var pendingCloseReq  = CLOSURE_REQUESTS.find(function(r){ return r.po_id === p.po_id && norm(r.status) === 'pending' && norm(r.request_type) !== 'reopen'; });
-    var pendingReopenReq = CLOSURE_REQUESTS.find(function(r){ return r.po_id === p.po_id && norm(r.status) === 'pending' && norm(r.request_type) === 'reopen'; });
+    var pendingCloseReq  = APPROVALS.find(function(r){ return r.po_id === p.po_id && norm(r.status) === 'pending' && norm(r.request_type) !== 'reopen'; });
+    var pendingReopenReq = APPROVALS.find(function(r){ return r.po_id === p.po_id && norm(r.status) === 'pending' && norm(r.request_type) === 'reopen'; });
 
     if (norm(p.closure_status) === 'closed') {
       // PO is closed — show reopen options instead
@@ -1403,11 +1413,15 @@
 
   // Manager decision on a pending closure request (from the detail view)
   function openClosureDecisionModal(requestId, poId, poNumber) {
-    var reqObj = CLOSURE_REQUESTS.find(function(r){ return r.request_id === requestId; });
-    var isReopen = reqObj && norm(reqObj.request_type) === 'reopen';
+    var reqObj = APPROVALS.find(function(r){ return r.request_id === requestId; });
+    var rt = reqObj ? norm(reqObj.request_type) : '';
+    var isReopen = rt === 'reopen';
+    var isPodless = rt === 'deliverywithoutpod';
+    var title = isReopen ? 'Reopen request' : isPodless ? 'Delivery without POD' : 'Closure request';
+    var approveLabel = isReopen ? 'Approve & reopen' : isPodless ? 'Approve & mark delivered' : 'Approve & close';
     var html = '<div class="modal-bg" onclick="if(event.target===this)closeClosureModal()" id="closureModalBg">'
       + '<div class="modal">'
-      + '<h3>'+(isReopen?'Reopen request':'Closure request')+'</h3>'
+      + '<h3>'+title+'</h3>'
       + '<div class="msub">PO '+esc(poNumber)+'</div>'
       + '<div class="mgr-note"><b>Requested by '+esc(reqObj?reqObj.requested_by:'')+'</b>'
       + '<span>'+esc(reqObj?reqObj.reason:'')+(reqObj&&reqObj.remarks?(' — '+esc(reqObj.remarks)):'')+'</span></div>'
@@ -1417,7 +1431,7 @@
       + '</div>'
       + '<div class="modal-actions" style="margin-top:12px">'
       + '<button class="btn" onclick="showDenyReasonField(\''+esc(requestId)+'\')">Deny</button>'
-      + '<button class="btn go" onclick="decideClosure(\''+esc(requestId)+'\',\'Approved\',\'\')">'+(isReopen?'Approve & reopen':'Approve & close')+'</button>'
+      + '<button class="btn go" onclick="decideClosure(\''+esc(requestId)+'\',\'Approved\',\'\')">'+approveLabel+'</button>'
       + '</div>'
       + '</div></div>';
     document.body.insertAdjacentHTML('beforeend', html);
@@ -1441,14 +1455,127 @@
   }
 
   function decideClosure(requestId, decision, denyReason) {
+    var reqObj = APPROVALS.find(function(r){ return r.request_id === requestId; });
+    var rt = reqObj ? norm(reqObj.request_type) : '';
     closeClosureModal();
     fetch(API, { method:'POST', body: JSON.stringify({ action: 'decideClosureRequest', request_id: requestId, decision: decision, deny_reason: denyReason||'', by: (ME&&ME.name)||'' }) })
       .then(function(r){ return r.json(); })
       .then(function(res){
         if (res.ok) {
-          toast(decision === 'Approved' ? 'PO closed.' : 'Closure request denied.');
+          if (decision === 'Approved') {
+            toast(rt==='reopen' ? 'PO reopened.' : rt==='deliverywithoutpod' ? 'Marked delivered.' : 'PO closed.');
+          } else {
+            toast('Request denied.');
+          }
           load();
-          if (VIEW === 'closures') renderClosuresPage();
+          if (VIEW === 'approvals') renderApprovalsPage();
+        } else { toast('Error: ' + (res.error||'unknown')); }
+      });
+  }
+
+  /* ---- POD upload & mark-delivered-without-POD ---- */
+
+  var PODSTATE = { file: null, base64: null, mimeType: null };
+
+  function openPODUploadModal(poId, invoiceId, invoiceNo) {
+    PODSTATE = { file: null, base64: null, mimeType: null };
+    var html = '<div class="modal-bg" onclick="if(event.target===this)closePODModal()" id="podModalBg">'
+      + '<div class="modal">'
+      + '<h3>Upload POD</h3>'
+      + '<div class="msub">Invoice '+esc(invoiceNo)+'</div>'
+      + '<input type="file" id="podFileInput" accept="application/pdf,image/*" style="display:none" onchange="onPODFileSelected(event)">'
+      + '<div id="podUploadArea" style="border:2px dashed var(--line);border-radius:12px;padding:24px;text-align:center;margin-bottom:12px">'
+      + '<div id="podUploadPrompt"><div style="font-size:13px;color:var(--muted);margin-bottom:10px">Photo or scan of the signed POD</div>'
+      + '<button class="btn go" onclick="document.getElementById(\'podFileInput\').click()">Choose file</button></div>'
+      + '<div id="podUploadChosen" style="display:none;font-size:13px;color:var(--ok)"></div>'
+      + '</div>'
+      + '<div class="modal-actions">'
+      + '<button class="btn" onclick="closePODModal()">Cancel</button>'
+      + '<button class="btn go" id="podSubmitBtn" disabled onclick="submitPODUpload(\''+esc(poId)+'\',\''+esc(invoiceId)+'\')">Upload</button>'
+      + '</div>'
+      + '</div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  }
+
+  function onPODFileSelected(event) {
+    var file = event.target.files[0];
+    if (!file) return;
+    PODSTATE.file = file;
+    PODSTATE.mimeType = file.type || 'application/pdf';
+    var reader = new FileReader();
+    reader.onload = function(e){
+      PODSTATE.base64 = e.target.result.split(',')[1];
+      document.getElementById('podUploadPrompt').style.display = 'none';
+      var chosen = document.getElementById('podUploadChosen');
+      chosen.style.display = '';
+      chosen.textContent = '✓ ' + file.name;
+      document.getElementById('podSubmitBtn').disabled = false;
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function closePODModal() { var el = document.getElementById('podModalBg'); if(el) el.remove(); }
+
+  function submitPODUpload(poId, invoiceId) {
+    if (!PODSTATE.base64) { toast('Please choose a file first.'); return; }
+    closePODModal();
+    toast('Uploading POD…');
+    fetch(API, { method:'POST', body: JSON.stringify({
+      action: 'uploadInvoicePOD',
+      po_id: poId,
+      invoice_id: invoiceId,
+      fileBase64: PODSTATE.base64,
+      mimeType: PODSTATE.mimeType,
+      fileName: PODSTATE.file ? PODSTATE.file.name : 'POD',
+      by: (ME&&ME.name)||''
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok) {
+          toast(res.auto_closed ? 'POD uploaded — all invoices delivered, PO auto-closed.' : 'POD uploaded.');
+          load();
+          if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
+            refreshDetailOpen();
+          }
+        } else { toast('Error: ' + (res.error||'unknown')); }
+      });
+  }
+
+  function openPODlessModal(poId, invoiceId, invoiceNo) {
+    var html = '<div class="modal-bg" onclick="if(event.target===this)closePODModal()" id="podModalBg">'
+      + '<div class="modal">'
+      + '<h3>Mark delivered without POD</h3>'
+      + '<div class="msub">Invoice '+esc(invoiceNo)+'</div>'
+      + '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Reason</div>'
+      + '<textarea id="podlessReason" class="assign" style="width:100%;min-height:60px" placeholder="e.g. POD copy lost in transit, customer has not returned it yet"></textarea>'
+      + '<div style="font-size:12px;color:var(--faint);margin-top:8px">This will be sent to your manager for approval. Once approved, the delivery date will be recorded as today\'s date.</div>'
+      + '<div class="modal-actions" style="margin-top:12px">'
+      + '<button class="btn" onclick="closePODModal()">Cancel</button>'
+      + '<button class="btn go" onclick="submitPODless(\''+esc(poId)+'\',\''+esc(invoiceId)+'\')">Submit request</button>'
+      + '</div>'
+      + '</div></div>';
+    document.body.insertAdjacentHTML('beforeend', html);
+  }
+
+  function submitPODless(poId, invoiceId) {
+    var reason = (document.getElementById('podlessReason').value || '').trim();
+    if (!reason) { toast('Please provide a reason.'); return; }
+    closePODModal();
+    fetch(API, { method:'POST', body: JSON.stringify({
+      action: 'requestDeliveryWithoutPOD',
+      po_id: poId,
+      invoice_id: invoiceId,
+      reason: reason,
+      by: (ME&&ME.name)||''
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        if (res.ok) {
+          toast('Request submitted to manager.');
+          load();
+          if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
+            refreshDetailOpen();
+          }
         } else { toast('Error: ' + (res.error||'unknown')); }
       });
   }
@@ -1922,24 +2049,43 @@
           var lrBadge = inv.lr_no
             ? '<span class="pill p-lr">✓ LR linked</span>'
             : '<span class="pill p-nolr">No LR</span>';
-          var podBadge = norm(inv.pod_status)==='delivered'
+          var podSt = norm(inv.pod_status);
+          var podBadge = podSt==='delivered'
             ? '<span class="pill p-poddone">POD done</span>'
-            : '<span class="pill p-pod">POD pending</span>';
+            : podSt==='delivered (no pod)'
+              ? '<span class="pill p-poddone">Delivered (no POD)</span>'
+              : '<span class="pill p-pod">POD pending</span>';
           var lrBtn = inv.lr_image_link
             ? '<a class="btn" href="'+esc(inv.lr_image_link)+'" target="_blank">LR ↗</a>'
             : '';
           var viewBtn = inv.file_link
             ? '<a class="btn" href="'+esc(inv.file_link)+'" target="_blank">Invoice ↗</a>'
             : '';
+          var podBtn = inv.pod_file_link
+            ? '<a class="btn" href="'+esc(inv.pod_file_link)+'" target="_blank">POD ↗</a>'
+            : '';
           var lineCount = inv.line_count || 0;
+
+          // Action buttons — only shown if not yet delivered in any form
+          var actionBtns = '';
+          if (podSt !== 'delivered' && podSt !== 'delivered (no pod)') {
+            var pendingPodless = APPROVALS.find(function(r){ return r.invoice_id === inv.invoice_id && norm(r.request_type)==='deliverywithoutpod' && norm(r.status)==='pending'; });
+            actionBtns = '<button class="btn go" onclick="openPODUploadModal(\''+esc(p.po_id)+'\',\''+esc(inv.invoice_id)+'\',\''+esc(inv.invoice_no)+'\')">Upload POD</button>'
+              + (pendingPodless
+                ? '<button class="btn" disabled style="color:var(--warn)">Delivery (no POD) requested</button>'
+                : '<button class="btn" onclick="openPODlessModal(\''+esc(p.po_id)+'\',\''+esc(inv.invoice_id)+'\',\''+esc(inv.invoice_no)+'\')">Mark delivered (no POD)</button>');
+          }
+
           return '<div class="inv-row">'
             + '<div class="inv-main">'
             +   '<div class="inv-no">'+esc(inv.invoice_no)+'</div>'
-            +   '<div class="inv-meta">'+esc(inv.invoice_date)+(inv.invoice_value?' · '+fmtINR(inv.invoice_value):'')+(lineCount?' · '+lineCount+' item'+(lineCount===1?'':'s'):'')+'</div>'
+            +   '<div class="inv-meta">'+esc(inv.invoice_date)+(inv.invoice_value?' · '+fmtINR(inv.invoice_value):'')+(lineCount?' · '+lineCount+' item'+(lineCount===1?'':'s'):'')+(inv.delivered_date?' · Delivered '+esc(inv.delivered_date):'')+'</div>'
             + '</div>'
             + '<div class="inv-badges">'+lrBadge+podBadge+'</div>'
             + lrBtn
             + viewBtn
+            + podBtn
+            + actionBtns
             + '</div>';
         }).join('');
         return '<div class="sec"><div class="sec-h"><h2>Invoices</h2><span class="c">'+invs.length+'</span></div>'
