@@ -55,6 +55,20 @@
         corners — switched from absolute to fixed positioning (computed from
         the button's screen coordinates), so it now renders above everything
         and flips upward if it would overflow the bottom of the screen.
+  v3.0  Fixed a real bug: the detail-view refresh after POD upload / closure /
+        daily-work actions was checking for an element id ('detailPage') that
+        doesn't exist (the real one is 'detail'), so it silently never
+        refreshed — required a hard reload to see updated status. Also fixed
+        a race where load() was called without waiting for it to finish
+        before refreshing the detail view. POD upload and "mark delivered
+        without POD" now show a spinner on the button and keep the modal
+        open until the request completes, instead of closing immediately
+        with no feedback. Closed-PO styling changed from red/danger to a
+        calm green — closed is a resolution, not a problem. Priority pill is
+        now replaced with a "✓ Delivered" pill once a PO is closed, since
+        priority is meaningless after closure. The "Closed" pill itself is
+        shorter now (just the short reason, not the full auto-close
+        remarks sentence, which was overflowing into a banner-like bar).
 -->
 <html>
 <head>
@@ -243,6 +257,9 @@
   .spin{width:22px;height:22px;border:2.5px solid var(--line2);border-top-color:var(--accent);
     border-radius:50%;animation:sp .7s linear infinite;margin:0 auto 12px}
   @keyframes sp{to{transform:rotate(360deg)}}
+  .spin-sm{display:inline-block;width:13px;height:13px;border:2px solid rgba(255,255,255,.4);
+    border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;vertical-align:-2px;margin-right:6px}
+  .btn[disabled]{opacity:.7;cursor:default}
 
   .login{position:fixed;inset:0;background:var(--bg);display:flex;align-items:center;justify-content:center;z-index:50;padding:20px}
   .login-card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:28px;
@@ -395,7 +412,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.11';
+  var VERSION = 'v3.0';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -854,7 +871,7 @@
 
   function load(){
     document.getElementById('list').innerHTML='<div class="state"><div class="spin"></div>Loading orders…</div>';
-    Promise.all([
+    return Promise.all([
       fetch(API + '?action=getPOs').then(function(r){return r.json();}),
       fetch(API + '?action=getDispatches').then(function(r){return r.json();}).catch(function(){return {};}),
       fetch(API + '?action=getDailyWork').then(function(r){return r.json();}).catch(function(){return [];}),
@@ -915,6 +932,9 @@
 
   // ---- pills ----
   function priorityPill(p){
+    if (norm(p.closure_status) === 'closed') {
+      return '<span class="pill" style="background:var(--ok-soft);color:var(--ok)">✓ Delivered</span>';
+    }
     var pr=suggestedPriority(p);
     if(pr==='high') return '<span class="pill p-high">High</span>';
     if(pr==='low') return '<span class="pill p-low">Low</span>';
@@ -933,7 +953,10 @@
   }
   function closedPill(p){
     if(norm(p.closure_status)!=='closed') return '';
-    return '<span class="pill" style="background:var(--danger-soft);color:var(--danger)">Closed'+(p.closure_reason?(' — '+esc(p.closure_reason)):'')+'</span>';
+    // Keep this pill short — full reason/remarks detail lives in the
+    // closure history block below, not crammed into a small pill.
+    var shortReason = (p.closure_reason || '').split(' — ')[0];
+    return '<span class="pill" style="background:var(--ok-soft);color:var(--ok)">Closed'+(shortReason?(' — '+esc(shortReason)):'')+'</span>';
   }
   function closureHistoryBlock(p){
     // Shows a small trail if the PO has ever been closed and/or reopened —
@@ -1416,10 +1439,7 @@
       .then(function(res){
         if (res.ok) {
           toast(isRequest ? (isReopen?'Reopen request submitted.':'Closure request submitted.') : (isReopen?'PO reopened.':'PO closed.'));
-          load();
-          if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
-            refreshDetailOpen();
-          }
+          load().then(refreshDetailOpen);
         } else { toast('Error: ' + (res.error||'unknown')); }
       });
   }
@@ -1480,8 +1500,10 @@
           } else {
             toast('Request denied.');
           }
-          load();
-          if (VIEW === 'approvals') renderApprovalsPage();
+          load().then(function(){
+            if (VIEW === 'approvals') renderApprovalsPage();
+            refreshDetailOpen();
+          });
         } else { toast('Error: ' + (res.error||'unknown')); }
       });
   }
@@ -1563,8 +1585,9 @@
 
   function submitPODUpload(poId, invoiceId) {
     if (!PODSTATE.base64) { toast('Please choose a file first.'); return; }
-    closePODModal();
-    toast('Uploading POD…');
+    var btn = document.getElementById('podSubmitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin-sm"></span>Uploading…';
     fetch(API, { method:'POST', body: JSON.stringify({
       action: 'uploadInvoicePOD',
       po_id: poId,
@@ -1577,12 +1600,19 @@
       .then(function(r){ return r.json(); })
       .then(function(res){
         if (res.ok) {
+          closePODModal();
           toast(res.auto_closed ? 'POD uploaded — all invoices delivered, PO auto-closed.' : 'POD uploaded.');
-          load();
-          if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
-            refreshDetailOpen();
-          }
-        } else { toast('Error: ' + (res.error||'unknown')); }
+          load().then(refreshDetailOpen);
+        } else {
+          toast('Error: ' + (res.error||'unknown'));
+          btn.disabled = false;
+          btn.textContent = 'Upload';
+        }
+      })
+      .catch(function(){
+        toast('Upload failed — please try again.');
+        btn.disabled = false;
+        btn.textContent = 'Upload';
       });
   }
 
@@ -1596,7 +1626,7 @@
       + '<div style="font-size:12px;color:var(--faint);margin-top:8px">This will be sent to your manager for approval. Once approved, the delivery date will be recorded as today\'s date.</div>'
       + '<div class="modal-actions" style="margin-top:12px">'
       + '<button class="btn" onclick="closePODModal()">Cancel</button>'
-      + '<button class="btn go" onclick="submitPODless(\''+esc(poId)+'\',\''+esc(invoiceId)+'\')">Submit request</button>'
+      + '<button class="btn go" id="podlessSubmitBtn" onclick="submitPODless(\''+esc(poId)+'\',\''+esc(invoiceId)+'\')">Submit request</button>'
       + '</div>'
       + '</div></div>';
     document.body.insertAdjacentHTML('beforeend', html);
@@ -1605,7 +1635,9 @@
   function submitPODless(poId, invoiceId) {
     var reason = (document.getElementById('podlessReason').value || '').trim();
     if (!reason) { toast('Please provide a reason.'); return; }
-    closePODModal();
+    var btn = document.getElementById('podlessSubmitBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin-sm"></span>Submitting…';
     fetch(API, { method:'POST', body: JSON.stringify({
       action: 'requestDeliveryWithoutPOD',
       po_id: poId,
@@ -1616,12 +1648,19 @@
       .then(function(r){ return r.json(); })
       .then(function(res){
         if (res.ok) {
+          closePODModal();
           toast('Request submitted to manager.');
-          load();
-          if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
-            refreshDetailOpen();
-          }
-        } else { toast('Error: ' + (res.error||'unknown')); }
+          load().then(refreshDetailOpen);
+        } else {
+          toast('Error: ' + (res.error||'unknown'));
+          btn.disabled = false;
+          btn.textContent = 'Submit request';
+        }
+      })
+      .catch(function(){
+        toast('Submission failed — please try again.');
+        btn.disabled = false;
+        btn.textContent = 'Submit request';
       });
   }
 
@@ -1708,10 +1747,7 @@
           toast('Added to daily work for ' + (repId !== ME.name ? repId + ' on ' : '') + date);
           renderDaily();
           // Re-render detail if open
-          if (document.getElementById('detailPage') && document.getElementById('detailPage').style.display !== 'none') {
-            var po = ALL.find(function(p){ return p.po_id === poId; });
-            if (po) document.getElementById('detailPage').innerHTML = detailHtml(po);
-          }
+          refreshDetailOpen();
         } else { toast('Error: ' + (res.error||'unknown')); }
       });
   }
