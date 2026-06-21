@@ -94,6 +94,19 @@
         monthly volume (+3/dispatch, +5/closure). All computed server-side
         in getPerformanceData_ for auditability. AI insights are on-demand
         only (Generate insights button) — never called automatically.
+  v3.4  Performance Tracker now shows "till date" explicitly when viewing the
+        current (in-progress) month, instead of silently showing partial
+        data with no indication. Dispatch-speed points are now VALUE-WEIGHTED
+        across multiple invoices/lots on the same PO (e.g. 25% dispatched
+        on-time + 75% dispatched 1-2 days late = 0.25×35 + 0.75×20 = 23.75pts)
+        instead of all-or-nothing on the first invoice — rewards partial
+        progress proportionally. Added Avg. Days to Dispatch (PO date → last
+        invoice date, only counted once 100% of value is invoiced OR the PO
+        is closed — so short-closed orders count too, using whatever was
+        actually dispatched) and Avg. Days to Deliver (same logic, using
+        latest delivered_date). Added Orders Received (by received_date,
+        independent count) and Orders Delivered (separate from Closed) to
+        both team and individual monthly trackers.
 -->
 <html>
 <head>
@@ -438,7 +451,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v3.3';
+  var VERSION = 'v3.4';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -1387,6 +1400,10 @@
       +   '<button class="btn" onclick="changePerfMonth(1)">›</button>'
       + '</div></div>';
 
+    if (PERF_DATA.is_current_month) {
+      html += '<div style="font-size:12.5px;color:var(--faint);margin-top:-8px;margin-bottom:14px">Showing data till date — '+esc(PERF_DATA.as_of_date)+' (this month is still in progress).</div>';
+    }
+
     // Rep selector pills
     html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px">'
       + '<button class="chip'+(!PERF_SELECTED_REP?' on':'')+'" onclick="selectPerfRep(null)">Shakti Dispatch Team</button>'
@@ -1429,12 +1446,22 @@
     html += leaderboardTable('⚡ Speed Star', 'Average points per order handled — rewards consistency, not just volume.', speedRank, function(r){return r.speed_points_per_order;}, 'pts/order');
 
     // Monthly tracker summary (team aggregate)
+    var totalReceived = reps.reduce(function(s,r){return s+r.received_count;},0);
     var totalDispatched = reps.reduce(function(s,r){return s+r.dispatched_count;},0);
+    var totalDelivered = reps.reduce(function(s,r){return s+r.delivered_count;},0);
     var totalClosed = reps.reduce(function(s,r){return s+r.closed_count;},0);
+    var dispatchDaysReps = reps.filter(function(r){return r.avg_days_to_dispatch!=null;});
+    var deliverDaysReps = reps.filter(function(r){return r.avg_days_to_deliver!=null;});
+    var teamAvgDispatch = dispatchDaysReps.length ? Math.round((dispatchDaysReps.reduce(function(s,r){return s+r.avg_days_to_dispatch;},0)/dispatchDaysReps.length)*10)/10 : null;
+    var teamAvgDeliver = deliverDaysReps.length ? Math.round((deliverDaysReps.reduce(function(s,r){return s+r.avg_days_to_deliver;},0)/deliverDaysReps.length)*10)/10 : null;
     html += '<div class="sec"><div class="sec-h"><h2>Monthly tracker — Team</h2></div>'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'
+      +   statCard(totalReceived, 'Orders received')
       +   statCard(totalDispatched, 'Orders dispatched')
+      +   statCard(totalDelivered, 'Orders delivered')
       +   statCard(totalClosed, 'Orders closed')
+      +   statCard(teamAvgDispatch!=null ? teamAvgDispatch+' days' : '—', 'Avg. days to dispatch')
+      +   statCard(teamAvgDeliver!=null ? teamAvgDeliver+' days' : '—', 'Avg. days to deliver')
       +   statCard(reps.length, 'Active reps')
       + '</div></div>';
 
@@ -1459,8 +1486,12 @@
 
     html += '<div class="sec"><div class="sec-h"><h2>Monthly tracker — '+esc(repName)+'</h2></div>'
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'
+      +   statCard(rep.received_count, 'Orders received')
       +   statCard(rep.dispatched_count, 'Orders dispatched')
+      +   statCard(rep.delivered_count, 'Orders delivered')
       +   statCard(rep.closed_count, 'Orders closed')
+      +   statCard(rep.avg_days_to_dispatch!=null ? rep.avg_days_to_dispatch+' days' : '—', 'Avg. days to dispatch')
+      +   statCard(rep.avg_days_to_deliver!=null ? rep.avg_days_to_deliver+' days' : '—', 'Avg. days to deliver')
       +   statCard(rep.closure_points, 'Closure speed pts')
       +   statCard(rep.dispatch_points, 'Dispatch speed pts')
       +   statCard(rep.ontime_delivery_rate!=null ? rep.ontime_delivery_rate+'%' : '—', 'On-time delivery rate')
