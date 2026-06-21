@@ -74,6 +74,14 @@
         always going through a request — only reps now go through manager
         approval for this. New backend action markDeliveredWithoutPOD for
         the direct manager path.
+  v3.2  Fixed "Delivery pending" showing on POs that were actually delivered.
+        Root cause: delivery_status on the PO is a legacy field nothing in
+        the app ever updates (it's set once to "Pending" at creation and
+        never touched again) — the real source of truth is each invoice's
+        pod_status. Added isFullyDelivered(p), which checks whether every
+        invoice on a PO has a confirmed delivery (POD or approved no-POD),
+        and switched the Delivery pill, the "Delivered" filter chip, and
+        isOpen() to use it instead of the dead field.
 -->
 <html>
 <head>
@@ -417,7 +425,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v3.1';
+  var VERSION = 'v3.2';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -443,7 +451,7 @@
     {key:'new', label:'New', test:function(p){var a=ageDays(p);return a!=null && a<=2;}},
     {key:'notdisp', label:'Not dispatched', test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
     {key:'process', label:'Under process',  test:function(p){return norm(p.processing_stage)!=='' && isOpen(p);}},
-    {key:'delivered', label:'Delivered',   test:function(p){return norm(p.delivery_status)==='delivered';}},
+    {key:'delivered', label:'Delivered',   test:function(p){return isFullyDelivered(p);}},
     {key:'closed',  label:'Closed',        test:function(p){return norm(p.closure_status)==='closed';}}
   ];
 
@@ -931,7 +939,7 @@
   }
   function isOpen(p){
     var d=norm(p.dispatch_status);
-    return d!=='dispatched' && norm(p.delivery_status)!=='delivered' && norm(p.closure_status)!=='closed';
+    return d!=='dispatched' && !isFullyDelivered(p) && norm(p.closure_status)!=='closed';
   }
   function isOverdue(p){ var a=ageDays(p); return a!=null && isOpen(p) && a>targetDays(p); }
 
@@ -952,8 +960,21 @@
     if(d.indexOf('process')>-1) return '<span class="pill s-proc">'+esc(p.dispatch_status)+'</span>';
     return '<span class="pill s-none">Not dispatched</span>';
   }
+  // A PO counts as fully delivered when every dispatched invoice has a
+  // confirmed delivery (POD uploaded, or approved delivery-without-POD).
+  // This mirrors checkAndAutoClosePO_ on the backend — delivery_status on
+  // the PO itself is a legacy field nothing ever updates, so we compute
+  // the real answer from invoice-level data instead.
+  function isFullyDelivered(p){
+    var invs = (DISPATCHES[String(p.po_id)] && DISPATCHES[String(p.po_id)].invoices) || [];
+    if (!invs.length) return false;
+    return invs.every(function(inv){
+      var st = norm(inv.pod_status);
+      return st === 'delivered' || st === 'delivered (no pod)';
+    });
+  }
   function deliveryPill(p){
-    if(norm(p.delivery_status)==='delivered') return '<span class="pill s-deliv">Delivered</span>';
+    if (norm(p.closure_status) === 'closed' || isFullyDelivered(p)) return '<span class="pill s-deliv">Delivered</span>';
     return '<span class="pill s-pend">Delivery pending</span>';
   }
   function closedPill(p){
