@@ -69,6 +69,11 @@
         priority is meaningless after closure. The "Closed" pill itself is
         shorter now (just the short reason, not the full auto-close
         remarks sentence, which was overflowing into a banner-like bar).
+  v3.1  "Mark delivered without POD" now applies directly for the manager
+        (no approval needed, mirrors how Close PO already worked) instead of
+        always going through a request — only reps now go through manager
+        approval for this. New backend action markDeliveredWithoutPOD for
+        the direct manager path.
 -->
 <html>
 <head>
@@ -412,7 +417,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v3.0';
+  var VERSION = 'v3.1';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -1617,16 +1622,19 @@
   }
 
   function openPODlessModal(poId, invoiceId, invoiceNo) {
+    var mgr = isManager();
     var html = '<div class="modal-bg" onclick="if(event.target===this)closePODModal()" id="podModalBg">'
       + '<div class="modal">'
       + '<h3>Mark delivered without POD</h3>'
       + '<div class="msub">Invoice '+esc(invoiceNo)+'</div>'
       + '<div style="margin-bottom:4px;font-size:13px;font-weight:500">Reason</div>'
       + '<textarea id="podlessReason" class="assign" style="width:100%;min-height:60px" placeholder="e.g. POD copy lost in transit, customer has not returned it yet"></textarea>'
-      + '<div style="font-size:12px;color:var(--faint);margin-top:8px">This will be sent to your manager for approval. Once approved, the delivery date will be recorded as today\'s date.</div>'
+      + '<div style="font-size:12px;color:var(--faint);margin-top:8px">'+(mgr
+          ? 'This invoice will be marked delivered immediately, with today\'s date recorded as the delivery date.'
+          : 'This will be sent to your manager for approval. Once approved, the delivery date will be recorded as today\'s date.')+'</div>'
       + '<div class="modal-actions" style="margin-top:12px">'
       + '<button class="btn" onclick="closePODModal()">Cancel</button>'
-      + '<button class="btn go" id="podlessSubmitBtn" onclick="submitPODless(\''+esc(poId)+'\',\''+esc(invoiceId)+'\')">Submit request</button>'
+      + '<button class="btn go" id="podlessSubmitBtn" onclick="submitPODless(\''+esc(poId)+'\',\''+esc(invoiceId)+'\')">'+(mgr?'Mark delivered':'Submit request')+'</button>'
       + '</div>'
       + '</div></div>';
     document.body.insertAdjacentHTML('beforeend', html);
@@ -1635,11 +1643,12 @@
   function submitPODless(poId, invoiceId) {
     var reason = (document.getElementById('podlessReason').value || '').trim();
     if (!reason) { toast('Please provide a reason.'); return; }
+    var mgr = isManager();
     var btn = document.getElementById('podlessSubmitBtn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spin-sm"></span>Submitting…';
+    btn.innerHTML = mgr ? '<span class="spin-sm"></span>Marking…' : '<span class="spin-sm"></span>Submitting…';
     fetch(API, { method:'POST', body: JSON.stringify({
-      action: 'requestDeliveryWithoutPOD',
+      action: mgr ? 'markDeliveredWithoutPOD' : 'requestDeliveryWithoutPOD',
       po_id: poId,
       invoice_id: invoiceId,
       reason: reason,
@@ -1649,18 +1658,18 @@
       .then(function(res){
         if (res.ok) {
           closePODModal();
-          toast('Request submitted to manager.');
+          toast(mgr ? (res.auto_closed ? 'Marked delivered — all invoices delivered, PO auto-closed.' : 'Marked delivered.') : 'Request submitted to manager.');
           load().then(refreshDetailOpen);
         } else {
           toast('Error: ' + (res.error||'unknown'));
           btn.disabled = false;
-          btn.textContent = 'Submit request';
+          btn.textContent = mgr ? 'Mark delivered' : 'Submit request';
         }
       })
       .catch(function(){
         toast('Submission failed — please try again.');
         btn.disabled = false;
-        btn.textContent = 'Submit request';
+        btn.textContent = mgr ? 'Mark delivered' : 'Submit request';
       });
   }
 
