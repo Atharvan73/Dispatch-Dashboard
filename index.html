@@ -82,6 +82,18 @@
         invoice on a PO has a confirmed delivery (POD or approved no-POD),
         and switched the Delivery pill, the "Delivered" filter chip, and
         isOpen() to use it instead of the dead field.
+  v3.3  New Performance Tracker page (manager only). Three leaderboards —
+        Overall (total points), Workhorse of the Month (volume), Speed Star
+        (avg points per order) — with month navigation and a rep
+        selector (defaults to team view). Points: closure speed (≤5d=50,
+        6-8d=35, 9-11d=20, 12-14d=10, >14d=0), dispatch speed vs each PO's
+        own target (on-time=35 down to >25d late=-10), on-time delivery
+        (10pts if delivered within the PO's target window from po_date —
+        NOT from dispatch date, since transit time isn't the rep's fault),
+        Daily Work streak (2pts/consecutive on-time day, capped 20), and
+        monthly volume (+3/dispatch, +5/closure). All computed server-side
+        in getPerformanceData_ for auditability. AI insights are on-demand
+        only (Generate insights button) — never called automatically.
 -->
 <html>
 <head>
@@ -418,6 +430,7 @@
   <div class="wrap" id="tasksPage" style="display:none"></div>
   <div class="wrap" id="uploadPage" style="display:none"></div>
   <div class="wrap" id="approvalsPage" style="display:none"></div>
+  <div class="wrap" id="performancePage" style="display:none"></div>
 
   <div class="toast" id="toast"></div>
 
@@ -425,7 +438,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v3.2';
+  var VERSION = 'v3.3';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -1179,7 +1192,7 @@
     }).length;
     var approvalsTabLabel = 'Approvals' + (pendingCount ? ' <span class="navbadge">'+pendingCount+'</span>' : '');
     var tabs = isManager()
-      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['approvals',approvalsTabLabel]]
+      ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['approvals',approvalsTabLabel],['performance','Performance']]
       : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['approvals',approvalsTabLabel]];
     el.innerHTML = tabs.map(function(t){
       return '<button class="navtab'+(VIEW===t[0]?' on':'')+'" onclick="showView(\''+t[0]+'\')">'+t[1]+'</button>';
@@ -1193,10 +1206,12 @@
     document.getElementById('tasksPage').style.display = (v==='tasks') ?'':'none';
     document.getElementById('uploadPage').style.display = (v==='upload') ?'':'none';
     document.getElementById('approvalsPage').style.display = (v==='approvals') ?'':'none';
+    document.getElementById('performancePage').style.display = (v==='performance') ?'':'none';
     if(v==='daily') renderDaily();
     if(v==='tasks') renderTasksPage();
     if(v==='upload') renderUploadPage();
     if(v==='approvals') renderApprovalsPage();
+    if(v==='performance') renderPerformancePage();
     renderNav();
     window.scrollTo(0,0);
   }
@@ -1307,6 +1322,213 @@
 
   // Closure button: rep sees "Request closure" (or pending-state), manager sees "Close PO" directly
   var CLOSURE_REASONS = ['Unavailability of items', 'Cost hike post-PO', 'Order cancelled', 'Mutually-agreed short-closure', 'Order completed but one or more PODs not available', 'Others'];
+
+  /* ---- Performance Tracker ---- */
+
+  var PERF_DATA = null;       // cached response from getPerformanceData
+  var PERF_MONTH = null;      // 'YYYY-MM' currently shown
+  var PERF_SELECTED_REP = null; // null = team view, else a rep name
+
+  function currentMonthStr(){
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+  }
+  function monthLabel(monthStr){
+    var parts = monthStr.split('-');
+    var d = new Date(+parts[0], +parts[1]-1, 1);
+    return d.toLocaleDateString('en-IN', { month: 'long', year: 'numeric' });
+  }
+
+  function renderPerformancePage(){
+    var el = document.getElementById('performancePage'); if(!el) return;
+    if (!PERF_MONTH) PERF_MONTH = currentMonthStr();
+    el.innerHTML = '<div class="state"><div class="spin"></div>Loading performance data…</div>';
+    fetchPerformanceData(PERF_MONTH);
+  }
+
+  function fetchPerformanceData(month){
+    fetch(API + '?action=getPerformanceData&month=' + encodeURIComponent(month))
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        PERF_DATA = res;
+        drawPerformancePage();
+      })
+      .catch(function(){
+        document.getElementById('performancePage').innerHTML = '<div class="state">Couldn\'t load performance data.</div>';
+      });
+  }
+
+  function changePerfMonth(delta){
+    var parts = PERF_MONTH.split('-').map(Number);
+    var d = new Date(parts[0], parts[1]-1+delta, 1);
+    PERF_MONTH = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
+    document.getElementById('performancePage').innerHTML = '<div class="state"><div class="spin"></div>Loading performance data…</div>';
+    fetchPerformanceData(PERF_MONTH);
+  }
+
+  function selectPerfRep(name){
+    PERF_SELECTED_REP = name || null;
+    drawPerformancePage();
+  }
+
+  function drawPerformancePage(){
+    var el = document.getElementById('performancePage'); if(!el || !PERF_DATA) return;
+    var reps = PERF_DATA.reps || [];
+
+    var overallRank = reps.slice().sort(function(a,b){ return b.overall_points - a.overall_points; });
+    var volumeRank = reps.slice().sort(function(a,b){ return (b.dispatched_count+b.closed_count) - (a.dispatched_count+a.closed_count); });
+    var speedRank = reps.slice().filter(function(r){ return (r.dispatched_count+r.closed_count) > 0; })
+      .sort(function(a,b){ return b.speed_points_per_order - a.speed_points_per_order; });
+
+    var html = '<div class="head"><h1>Performance Tracker</h1>'
+      + '<div style="display:flex;align-items:center;gap:8px;margin-left:auto">'
+      +   '<button class="btn" onclick="changePerfMonth(-1)">‹</button>'
+      +   '<span class="count" style="min-width:140px;text-align:center">'+esc(monthLabel(PERF_MONTH))+'</span>'
+      +   '<button class="btn" onclick="changePerfMonth(1)">›</button>'
+      + '</div></div>';
+
+    // Rep selector pills
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px">'
+      + '<button class="chip'+(!PERF_SELECTED_REP?' on':'')+'" onclick="selectPerfRep(null)">Shakti Dispatch Team</button>'
+      + reps.map(function(r){
+          return '<button class="chip'+(PERF_SELECTED_REP===r.name?' on':'')+'" onclick="selectPerfRep(\''+esc(r.name)+'\')">'+esc(r.name)+'</button>';
+        }).join('')
+      + '</div>';
+
+    if (!PERF_SELECTED_REP) {
+      html += drawTeamView(overallRank, volumeRank, speedRank, reps);
+    } else {
+      html += drawIndividualView(PERF_SELECTED_REP, overallRank, volumeRank, speedRank);
+    }
+
+    el.innerHTML = html;
+  }
+
+  function leaderboardTable(title, subtitle, rankedReps, valueFn, valueLabel, highlightName){
+    if (!rankedReps.length) return '<div class="sec"><div class="sec-h"><h2>'+esc(title)+'</h2></div><div class="empty">No data yet this month.</div></div>';
+    var rows = rankedReps.map(function(r, idx){
+      var isHighlight = highlightName && r.name === highlightName;
+      var medal = idx===0?'🥇':idx===1?'🥈':idx===2?'🥉':(idx+1)+'.';
+      return '<div class="inv-row" style="cursor:pointer;'+(isHighlight?'background:var(--accent-soft)':'')+'" onclick="selectPerfRep(\''+esc(r.name)+'\')">'
+        + '<div class="inv-main" style="display:flex;align-items:center;gap:10px">'
+        +   '<span style="font-size:15px;min-width:24px">'+medal+'</span>'
+        +   '<div class="inv-no">'+esc(r.name)+'</div>'
+        + '</div>'
+        + '<div style="font-weight:600;font-size:14px">'+valueFn(r)+' <span style="font-size:11px;color:var(--faint);font-weight:400">'+esc(valueLabel)+'</span></div>'
+        + '</div>';
+    }).join('');
+    return '<div class="sec"><div class="sec-h"><h2>'+esc(title)+'</h2></div>'
+      + (subtitle ? '<div class="empty" style="text-align:left;padding:0 0 12px;color:var(--faint);font-size:12.5px">'+esc(subtitle)+'</div>' : '')
+      + '<div class="items">'+rows+'</div></div>';
+  }
+
+  function drawTeamView(overallRank, volumeRank, speedRank, reps){
+    var html = '';
+    html += leaderboardTable('🏆 Overall — Best Performer', 'Total points across speed, volume, on-time delivery and Daily Work adherence.', overallRank, function(r){return r.overall_points;}, 'pts');
+    html += leaderboardTable('💪 Workhorse of the Month', 'Most orders dispatched + closed this month.', volumeRank, function(r){return r.dispatched_count + r.closed_count;}, 'orders');
+    html += leaderboardTable('⚡ Speed Star', 'Average points per order handled — rewards consistency, not just volume.', speedRank, function(r){return r.speed_points_per_order;}, 'pts/order');
+
+    // Monthly tracker summary (team aggregate)
+    var totalDispatched = reps.reduce(function(s,r){return s+r.dispatched_count;},0);
+    var totalClosed = reps.reduce(function(s,r){return s+r.closed_count;},0);
+    html += '<div class="sec"><div class="sec-h"><h2>Monthly tracker — Team</h2></div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'
+      +   statCard(totalDispatched, 'Orders dispatched')
+      +   statCard(totalClosed, 'Orders closed')
+      +   statCard(reps.length, 'Active reps')
+      + '</div></div>';
+
+    html += aiInsightsBlock(null);
+    return html;
+  }
+
+  function drawIndividualView(repName, overallRank, volumeRank, speedRank){
+    var rep = overallRank.find(function(r){ return r.name === repName; });
+    if (!rep) return '<div class="empty">No data for '+esc(repName)+' this month.</div>';
+
+    var overallPos = overallRank.findIndex(function(r){return r.name===repName;}) + 1;
+    var volumePos = volumeRank.findIndex(function(r){return r.name===repName;}) + 1;
+    var speedPos = speedRank.findIndex(function(r){return r.name===repName;}) + 1;
+
+    var html = '<div class="sec"><div class="sec-h"><h2>'+esc(repName)+'\u2019s standing</h2></div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'
+      +   rankCard(overallPos, overallRank.length, 'Overall', rep.overall_points, 'pts')
+      +   rankCard(volumePos, volumeRank.length, 'Workhorse', rep.dispatched_count+rep.closed_count, 'orders')
+      +   (speedPos>0 ? rankCard(speedPos, speedRank.length, 'Speed Star', rep.speed_points_per_order, 'pts/order') : statCard('—', 'Speed Star (no orders yet)'))
+      + '</div></div>';
+
+    html += '<div class="sec"><div class="sec-h"><h2>Monthly tracker — '+esc(repName)+'</h2></div>'
+      + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'
+      +   statCard(rep.dispatched_count, 'Orders dispatched')
+      +   statCard(rep.closed_count, 'Orders closed')
+      +   statCard(rep.closure_points, 'Closure speed pts')
+      +   statCard(rep.dispatch_points, 'Dispatch speed pts')
+      +   statCard(rep.ontime_delivery_rate!=null ? rep.ontime_delivery_rate+'%' : '—', 'On-time delivery rate')
+      +   statCard(rep.streak_points, 'Daily Work streak pts')
+      + '</div></div>';
+
+    html += aiInsightsBlock(repName);
+    return html;
+  }
+
+  function statCard(value, label){
+    return '<div style="background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center">'
+      + '<div style="font-size:22px;font-weight:700">'+esc(String(value))+'</div>'
+      + '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">'+esc(label)+'</div>'
+      + '</div>';
+  }
+  function rankCard(pos, total, label, value, unit){
+    return '<div style="background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;text-align:center">'
+      + '<div style="font-size:22px;font-weight:700">#'+pos+'<span style="font-size:13px;font-weight:400;color:var(--faint)">/'+total+'</span></div>'
+      + '<div style="font-size:11.5px;color:var(--muted);margin-top:2px">'+esc(label)+' · '+esc(String(value))+' '+esc(unit)+'</div>'
+      + '</div>';
+  }
+
+  // AI insights — cached per (month, scope) in memory only; regenerated on
+  // demand via the button, never automatically, to avoid silent Gemini calls
+  // on every page open.
+  var PERF_INSIGHTS_CACHE = {}; // key: month+'|'+(repName||'team') -> text
+
+  function aiInsightsBlock(repName){
+    var key = PERF_MONTH + '|' + (repName || 'team');
+    var cached = PERF_INSIGHTS_CACHE[key];
+    return '<div class="sec"><div class="sec-h"><h2>AI insights</h2>'
+      + '<button class="btn go" id="perfInsightsBtn" onclick="generatePerfInsights('+(repName?("'"+esc(repName)+"'"):'null')+')">'+(cached?'Regenerate':'Generate insights')+'</button>'
+      + '</div>'
+      + '<div id="perfInsightsBody">'+(cached ? '<div class="empty" style="text-align:left;white-space:pre-wrap">'+esc(cached)+'</div>' : '<div class="empty">Not generated yet for this month.</div>')+'</div>'
+      + '</div>';
+  }
+
+  function generatePerfInsights(repName){
+    var btn = document.getElementById('perfInsightsBtn');
+    var body = document.getElementById('perfInsightsBody');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spin-sm"></span>Generating…';
+    body.innerHTML = '<div class="empty">Thinking…</div>';
+
+    fetch(API, { method:'POST', body: JSON.stringify({
+      action: 'generatePerformanceInsights',
+      month: PERF_MONTH,
+      rep_name: repName || ''
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        btn.disabled = false;
+        btn.textContent = 'Regenerate';
+        if (res.ok) {
+          var key = PERF_MONTH + '|' + (repName || 'team');
+          PERF_INSIGHTS_CACHE[key] = res.insights;
+          body.innerHTML = '<div class="empty" style="text-align:left;white-space:pre-wrap">'+esc(res.insights)+'</div>';
+        } else {
+          body.innerHTML = '<div class="empty" style="color:var(--danger)">Could not generate insights: '+esc(res.error||'unknown error')+'</div>';
+        }
+      })
+      .catch(function(){
+        btn.disabled = false;
+        btn.textContent = 'Generate insights';
+        body.innerHTML = '<div class="empty" style="color:var(--danger)">Something went wrong. Please try again.</div>';
+      });
+  }
 
   function renderApprovalsPage(){
     var el = document.getElementById('approvalsPage'); if(!el) return;
