@@ -51,6 +51,10 @@
         pills (absence of a badge already implies pending — no need to
         spell it out). Combined "Upload POD" and "Mark delivered (no POD)"
         into a single "Delivery ▾" dropdown button.
+  v2.11 Fixed Delivery dropdown being clipped by the invoice card's rounded
+        corners — switched from absolute to fixed positioning (computed from
+        the button's screen coordinates), so it now renders above everything
+        and flips upward if it would overflow the bottom of the screen.
 -->
 <html>
 <head>
@@ -321,8 +325,8 @@
   .p-lr{background:var(--ok-soft);color:var(--ok)}
   .p-poddone{background:var(--ok-soft);color:var(--ok)}
   .dd-wrap{position:relative;display:inline-block}
-  .dd-menu{position:absolute;top:calc(100% + 4px);right:0;background:var(--surface);border:1px solid var(--line);
-    border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.1);z-index:50;min-width:200px;overflow:hidden}
+  .dd-menu{position:fixed;background:var(--surface);border:1px solid var(--line);
+    border-radius:10px;box-shadow:0 4px 16px rgba(0,0,0,.15);z-index:9999;min-width:200px;overflow:hidden}
   .dd-menu button{display:block;width:100%;text-align:left;padding:10px 14px;font:inherit;font-size:13px;
     background:none;border:none;cursor:pointer;color:var(--ink)}
   .dd-menu button:hover{background:var(--accent-soft)}
@@ -391,7 +395,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v2.10';
+  var VERSION = 'v2.11';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -1490,16 +1494,29 @@
 
   function toggleInvDropdown(event, invoiceId) {
     event.stopPropagation();
+    var btn = event.currentTarget;
     var menu = document.getElementById('dd-' + invoiceId);
     var wasOpen = menu.style.display !== 'none';
     closeAllInvDropdowns();
-    menu.style.display = wasOpen ? 'none' : '';
+    if (wasOpen) return;
+    var rect = btn.getBoundingClientRect();
+    menu.style.display = '';
+    // Position below the button by default; flip above if it would overflow the viewport bottom
+    var menuHeight = menu.offsetHeight;
+    var top = rect.bottom + 4;
+    if (top + menuHeight > window.innerHeight) top = rect.top - menuHeight - 4;
+    menu.style.top = top + 'px';
+    // Right-align the menu to the button, but keep it on-screen
+    var left = rect.right - menu.offsetWidth;
+    if (left < 8) left = 8;
+    menu.style.left = left + 'px';
   }
 
-  // Close any open dropdown when clicking elsewhere on the page
+  // Close any open dropdown when clicking elsewhere on the page, or scrolling
   document.addEventListener('click', function(e){
     if (!e.target.closest('.dd-wrap')) closeAllInvDropdowns();
   });
+  document.addEventListener('scroll', closeAllInvDropdowns, true);
 
   /* ---- POD upload & mark-delivered-without-POD ---- */
 
