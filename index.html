@@ -118,6 +118,20 @@
         4-6 over=20, 7-9 over=10, >9 over=0) — since closure is the customer-
         facing commitment that actually matters. On-time delivery scoring
         was already correct (uses the PO's promise) and is unchanged.
+  v3.6  Fixed leaderboard subtitle styling — it was reusing the .empty class
+        (a dashed-border placeholder box meant for "no data" states), which
+        caused the description text to overflow/misrender. Added a proper
+        lb-subtitle class instead: plain caption text, no box, wraps cleanly.
+  v3.7  Fixed Team monthly tracker undercounting: orders received/dispatched/
+        delivered/closed were only counted if the PO had an assigned rep —
+        unassigned POs (real work that happened, just not yet attributed to
+        a person) were silently dropped from every metric, including the
+        Team's own totals. Added a separate unassigned-orders bucket on the
+        backend, folded into the Team tracker's counts (with a note
+        explaining why), while correctly staying OUT of every individual
+        rep's leaderboard/points — since there's no one to credit. AI
+        insights for the team now also mention unassigned activity so it
+        doesn't contradict what the manager sees on the tracker.
 -->
 <html>
 <head>
@@ -276,6 +290,7 @@
   .iprice{font-size:13px;color:var(--ink);font-weight:600}
   .empty{background:var(--surface);border:1px dashed var(--line2);border-radius:14px;
     padding:22px;text-align:center;color:var(--faint);font-size:13px}
+  .lb-subtitle{color:var(--faint);font-size:12.5px;line-height:1.5;margin:2px 0 12px;max-width:680px}
 
   .pulse{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:22px}
   .kpi{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px;
@@ -462,7 +477,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v3.5';
+  var VERSION = 'v3.7';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -1446,7 +1461,7 @@
         + '</div>';
     }).join('');
     return '<div class="sec"><div class="sec-h"><h2>'+esc(title)+'</h2></div>'
-      + (subtitle ? '<div class="empty" style="text-align:left;padding:0 0 12px;color:var(--faint);font-size:12.5px">'+esc(subtitle)+'</div>' : '')
+      + (subtitle ? '<div class="lb-subtitle">'+esc(subtitle)+'</div>' : '')
       + '<div class="items">'+rows+'</div></div>';
   }
 
@@ -1456,16 +1471,22 @@
     html += leaderboardTable('💪 Workhorse of the Month', 'Most orders dispatched + closed this month.', volumeRank, function(r){return r.dispatched_count + r.closed_count;}, 'orders');
     html += leaderboardTable('⚡ Speed Star', 'Average points per order handled — rewards consistency, not just volume.', speedRank, function(r){return r.speed_points_per_order;}, 'pts/order');
 
-    // Monthly tracker summary (team aggregate)
-    var totalReceived = reps.reduce(function(s,r){return s+r.received_count;},0);
-    var totalDispatched = reps.reduce(function(s,r){return s+r.dispatched_count;},0);
-    var totalDelivered = reps.reduce(function(s,r){return s+r.delivered_count;},0);
-    var totalClosed = reps.reduce(function(s,r){return s+r.closed_count;},0);
+    // Monthly tracker summary (team aggregate) — includes orders with no
+    // assigned rep, since the work still happened even if unattributed.
+    // Those orders contribute counts here but no individual gets credit/
+    // points for them (there's no one to credit).
+    var u = PERF_DATA.unassigned || { received_count:0, dispatched_count:0, delivered_count:0, closed_count:0 };
+    var totalReceived = reps.reduce(function(s,r){return s+r.received_count;},0) + u.received_count;
+    var totalDispatched = reps.reduce(function(s,r){return s+r.dispatched_count;},0) + u.dispatched_count;
+    var totalDelivered = reps.reduce(function(s,r){return s+r.delivered_count;},0) + u.delivered_count;
+    var totalClosed = reps.reduce(function(s,r){return s+r.closed_count;},0) + u.closed_count;
     var dispatchDaysReps = reps.filter(function(r){return r.avg_days_to_dispatch!=null;});
     var deliverDaysReps = reps.filter(function(r){return r.avg_days_to_deliver!=null;});
     var teamAvgDispatch = dispatchDaysReps.length ? Math.round((dispatchDaysReps.reduce(function(s,r){return s+r.avg_days_to_dispatch;},0)/dispatchDaysReps.length)*10)/10 : null;
     var teamAvgDeliver = deliverDaysReps.length ? Math.round((deliverDaysReps.reduce(function(s,r){return s+r.avg_days_to_deliver;},0)/deliverDaysReps.length)*10)/10 : null;
+    var hasUnassigned = (u.received_count + u.dispatched_count + u.delivered_count + u.closed_count) > 0;
     html += '<div class="sec"><div class="sec-h"><h2>Monthly tracker — Team</h2></div>'
+      + (hasUnassigned ? '<div class="lb-subtitle">Includes orders with no assigned rep yet — that work still happened, but no individual leaderboard reflects it.</div>' : '')
       + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">'
       +   statCard(totalReceived, 'Orders received')
       +   statCard(totalDispatched, 'Orders dispatched')
