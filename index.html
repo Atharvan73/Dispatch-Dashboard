@@ -477,7 +477,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v4.0';
+  var VERSION = 'v4.2';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -577,7 +577,7 @@
         }
       })
       .catch(function(){ USERS = []; REPS = []; MY_REPS = []; })
-      .then(function(){ load(); loadTasks(); });
+      .then(function(){ load(); });
   }
   function isManager(){ return ME && norm(ME.role) === 'manager'; }
   function isCoordinator(){ return ME && norm(ME.role) === 'coordinator'; }
@@ -949,17 +949,27 @@
 
   function load(){
     document.getElementById('list').innerHTML='<div class="state"><div class="spin"></div>Loading orders…</div>';
-    return Promise.all([
-      fetch(API + '?action=getPOs').then(function(r){return r.json();}),
-      fetch(API + '?action=getDispatches').then(function(r){return r.json();}).catch(function(){return {};}),
-      fetch(API + '?action=getDailyWork').then(function(r){return r.json();}).catch(function(){return [];}),
-      fetch(API + '?action=getApprovals').then(function(r){return r.json();}).catch(function(){return [];})
-    ]).then(function(results){
-      DISPATCHES = results[1] || {};
-      DAILY_WORK = results[2] || [];
-      APPROVALS = results[3] || [];
-      onData(results[0]);
-    }).catch(onErr);
+    var url = API + '?action=getAll';
+    return fetch(url)
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        DISPATCHES = res.dispatches || {};
+        DAILY_WORK = res.daily_work || [];
+        APPROVALS  = res.approvals  || [];
+        USERS = res.users || [];
+        REPS  = USERS.filter(function(x){return norm(x.role)==='rep';}).map(function(x){return x.name;});
+        if (isCoordinator()) {
+          MY_REPS = USERS.filter(function(x){
+            return norm(x.role)==='rep' && norm(x.coordinator||'')===norm(ME.name);
+          }).map(function(x){return x.name;});
+        }
+        // Tasks come in the same payload — update TASKS and re-render
+        var tasks = res.tasks || [];
+        TASKS = tasks;
+        onData(res.pos || []);
+        if(VIEW==='tasks') renderTasksPage();
+        if(VIEW==='daily') renderDaily();
+      }).catch(onErr);
   }
   function onErr(e){
     document.getElementById('list').innerHTML='<div class="state">Couldn\'t load orders.<br>'+esc(e&&e.message)+'</div>';
