@@ -477,7 +477,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v4.2';
+  var VERSION = 'v4.3';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -497,15 +497,16 @@
     return d < CUTOFF;
   }
   var FILTERS = [
-    {key:'all',     label:'All',         test:function(){return true;}},
-    {key:'unassigned', label:'Unassigned', test:function(p){return !p.assigned_rep;}},
-    {key:'myreps', label:'My reps\' orders', test:function(p){return MY_REPS.indexOf(p.assigned_rep)!==-1;}, coordOnly:true},
-    {key:'overdue', label:'Overdue', test:function(p){return isOverdue(p);}},
-    {key:'new', label:'New', test:function(p){var a=ageDays(p);return a!=null && a<=2;}},
-    {key:'notdisp', label:'Not dispatched', test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
-    {key:'process', label:'Under process',  test:function(p){return norm(p.processing_stage)!=='' && isOpen(p);}},
-    {key:'delivered', label:'Delivered',   test:function(p){return isFullyDelivered(p);}},
-    {key:'closed',  label:'Closed',        test:function(p){return norm(p.closure_status)==='closed';}}
+    {key:'all',       label:'All',               test:function(){return true;}},
+    {key:'unassigned', label:'Unassigned',        test:function(p){return !p.assigned_rep;}},
+    {key:'myreps',    label:'My reps\' orders',  test:function(p){return MY_REPS.indexOf(p.assigned_rep)!==-1;}, coordOnly:true},
+    {key:'assignedme',label:'Assigned to me',    test:function(p){return norm(p.assigned_rep)===norm(ME&&ME.name);}, coordOnly:true},
+    {key:'overdue',   label:'Overdue',            test:function(p){return isOverdue(p);}},
+    {key:'new',       label:'New',                test:function(p){var a=ageDays(p);return a!=null && a<=2;}},
+    {key:'notdisp',   label:'Not dispatched',     test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
+    {key:'process',   label:'Under process',      test:function(p){return norm(p.processing_stage)!=='' && isOpen(p);}},
+    {key:'delivered', label:'Delivered',          test:function(p){return isFullyDelivered(p);}},
+    {key:'closed',    label:'Closed',             test:function(p){return norm(p.closure_status)==='closed';}}
   ];
 
   function norm(s){return String(s||'').trim().toLowerCase();}
@@ -567,7 +568,8 @@
       .then(function(r){ return r.json(); })
       .then(function(u){
         USERS = u || [];
-        REPS = USERS.filter(function(x){return norm(x.role)==='rep';}).map(function(x){return x.name;});
+        // Manager can assign to reps AND coordinators; coordinator assign modal uses MY_REPS only
+        REPS = USERS.filter(function(x){return norm(x.role)==='rep' || norm(x.role)==='coordinator';}).map(function(x){return x.name;});
         if (isCoordinator()) {
           // MY_REPS = only this coordinator's reps (used for assign modal scoping)
           // REPS stays as all reps (used for filter dropdown — coordinator has full visibility)
@@ -957,7 +959,7 @@
         DAILY_WORK = res.daily_work || [];
         APPROVALS  = res.approvals  || [];
         USERS = res.users || [];
-        REPS  = USERS.filter(function(x){return norm(x.role)==='rep';}).map(function(x){return x.name;});
+        REPS  = USERS.filter(function(x){return norm(x.role)==='rep' || norm(x.role)==='coordinator';}).map(function(x){return x.name;});
         if (isCoordinator()) {
           MY_REPS = USERS.filter(function(x){
             return norm(x.role)==='rep' && norm(x.coordinator||'')===norm(ME.name);
