@@ -477,7 +477,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v3.8';
+  var VERSION = 'v4.0';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -499,6 +499,7 @@
   var FILTERS = [
     {key:'all',     label:'All',         test:function(){return true;}},
     {key:'unassigned', label:'Unassigned', test:function(p){return !p.assigned_rep;}},
+    {key:'myreps', label:'My reps\' orders', test:function(p){return MY_REPS.indexOf(p.assigned_rep)!==-1;}, coordOnly:true},
     {key:'overdue', label:'Overdue', test:function(p){return isOverdue(p);}},
     {key:'new', label:'New', test:function(p){var a=ageDays(p);return a!=null && a<=2;}},
     {key:'notdisp', label:'Not dispatched', test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
@@ -567,14 +568,23 @@
       .then(function(u){
         USERS = u || [];
         REPS = USERS.filter(function(x){return norm(x.role)==='rep';}).map(function(x){return x.name;});
+        if (isCoordinator()) {
+          // MY_REPS = only this coordinator's reps (used for assign modal scoping)
+          // REPS stays as all reps (used for filter dropdown — coordinator has full visibility)
+          MY_REPS = USERS.filter(function(x){
+            return norm(x.role)==='rep' && norm(x.coordinator||'')=== norm(ME.name);
+          }).map(function(x){return x.name;});
+        }
       })
-      .catch(function(){ USERS = []; REPS = []; })
+      .catch(function(){ USERS = []; REPS = []; MY_REPS = []; })
       .then(function(){ load(); loadTasks(); });
   }
   function isManager(){ return ME && norm(ME.role) === 'manager'; }
   function scopedRows(){
     var base;
-    if (isManager()){
+    if (isManager() || isCoordinator()){
+      // Manager and coordinator both see ALL POs.
+      // Coordinator uses the 'My reps\' orders' filter chip to narrow to their team.
       if(!REP_FILTER) base = ALL;
       else if(REP_FILTER==='__unassigned__') base = ALL.filter(function(p){return !p.assigned_rep;});
       else base = ALL.filter(function(p){ return norm(p.assigned_rep)===norm(REP_FILTER); });
@@ -590,7 +600,7 @@
     var who = p.assigned_rep
       ? '<span class="who"><span class="av">'+esc(initials(p.assigned_rep))+'</span>'+esc(p.assigned_rep)+'</span>'
       : '<span class="who">'+ICON('user')+'Unassigned</span>';
-    if (!isManager()) return who;
+    if (!isManagerOrCoord()) return who;
     var label = p.assigned_rep ? 'Reassign' : 'Assign';
     return '<span class="assign-wrap" style="display:inline-flex;align-items:center;gap:10px">'+who
       + '<button class="btn" onclick="event.stopPropagation();openAssign(\''+esc(p.po_id)+'\')">'+label+'</button></span>';
@@ -601,7 +611,8 @@
     var p = ALL.filter(function(x){return String(x.po_id)===String(poId);})[0];
     if (!p) return;
     ASSIGN_PO = poId;
-    var names = REPS.slice();
+    // Coordinator can only assign to their own reps; manager sees all reps
+    var names = (isCoordinator() ? MY_REPS : REPS).slice();
     if (p.assigned_rep && names.map(norm).indexOf(norm(p.assigned_rep)) < 0) names.push(p.assigned_rep);
     var repOpts = '<option value="">Unassigned</option>' + names.map(function(n){
       return '<option value="'+esc(n)+'"'+(norm(n)===norm(p.assigned_rep)?' selected':'')+'>'+esc(n)+'</option>';
@@ -642,7 +653,7 @@
     var prev = { rep:p.assigned_rep||'', prio:p.priority||'', note:p.manager_note||'' };
     p.assigned_rep = rep; p.priority = prio; p.manager_note = note;   // optimistic
     closeAssign(); refreshViews();
-    fetch(API, { method:'POST', body: JSON.stringify({ action:'assign', po_id:poId, rep:rep, priority:prio, remark:note, by:(ME&&ME.name)||'' }) })
+    fetch(API, { method:'POST', body: JSON.stringify({ action:'assign', po_id:poId, rep:rep, priority:prio, remark:note, by:(ME&&ME.name)||'', by_role:(ME&&ME.role)||'' }) })
       .then(function(r){ return r.json(); })
       .then(function(res){
         if (res && res.ok){ toast(rep ? ('Assigned to '+rep) : 'Set to unassigned'); }
@@ -954,10 +965,12 @@
   function onData(rows){
     ALL = rows || [];
     var mgr = isManager();
-    document.getElementById('pulse').style.display = mgr ? '' : 'none';
-    document.getElementById('attention').style.display = mgr ? '' : 'none';
-    document.querySelector('#boardhead h1').textContent = mgr ? 'All orders' : 'My orders';
-    if (mgr){ renderPulse(); renderAttention(); renderRepFilter(); }
+    var coord = isCoordinator();
+    var elevated = mgr || coord;
+    document.getElementById('pulse').style.display = elevated ? '' : 'none';
+    document.getElementById('attention').style.display = elevated ? '' : 'none';
+    document.querySelector('#boardhead h1').textContent = mgr ? 'All orders' : coord ? 'My team\'s orders' : 'My orders';
+    if (elevated){ renderPulse(); renderAttention(); renderRepFilter(); }
     renderChips(); render(); renderTasks(); renderNav();
   }
 
@@ -1143,7 +1156,9 @@
   function renderChips(){
     var base = scopedRows().filter(function(p){return !isArchived(p);});
     var baseExclClosed = base.filter(function(p){return norm(p.closure_status)!=='closed';});
-    document.getElementById('chips').innerHTML = FILTERS.map(function(f){
+    document.getElementById('chips').innerHTML = FILTERS.filter(function(f){
+      return !f.coordOnly || isCoordinator(); // only show coord-specific chips for coordinators
+    }).map(function(f){
       var n = (f.key === 'closed' ? base : baseExclClosed).filter(f.test).length;
       return '<button class="chip'+(f.key===FILTER?' on':'')+'" onclick="setFilter(\''+f.key+'\')">'+f.label+' <span class="n">'+n+'</span></button>';
     }).join('');
@@ -1195,7 +1210,9 @@
 
   function renderRepFilter(){
     var el=document.getElementById('repFilterWrap'); if(!el) return;
-    if(!isManager()){ el.innerHTML=''; return; }
+    if(!isManagerOrCoord()){ el.innerHTML=''; return; }
+    // Both manager and coordinator see all reps in the filter dropdown (full visibility).
+    // The assign modal separately restricts coordinator to their own reps.
     var repOpts='<option value="">All reps</option><option value="__unassigned__"'+(REP_FILTER==='__unassigned__'?' selected':'')+'>Unassigned</option>'
       + REPS.map(function(n){return '<option value="'+esc(n)+'"'+(norm(n)===norm(REP_FILTER)?' selected':'')+'>'+esc(n)+'</option>';}).join('');
     var firmOpts=['','Shakti','Universal'].map(function(f){
@@ -1211,7 +1228,7 @@
   function setFilter(k){
     FILTER=k; QUERY='';
     var sb=document.getElementById('poSearch'); if(sb) sb.value='';
-    renderPulse&&(isManager()&&renderPulse()); renderChips(); render();
+    renderPulse&&(isManagerOrCoord()&&renderPulse()); renderChips(); render();
     document.getElementById('boardhead').scrollIntoView({behavior:'smooth', block:'start'});
   }
 
@@ -1227,12 +1244,17 @@
   function renderNav(){
     var el=document.getElementById('nav'); if(!el) return;
     var pendingCount = APPROVALS.filter(function(r){
-      return norm(r.status)==='pending' && (isManager() || norm(r.requested_by)===norm(ME&&ME.name));
+      if (norm(r.status)!=='pending') return false;
+      if (isManager()) return true;
+      if (isCoordinator()) return MY_REPS.indexOf(r.requested_by) !== -1;
+      return norm(r.requested_by)===norm(ME&&ME.name);
     }).length;
     var approvalsTabLabel = 'Approvals' + (pendingCount ? ' <span class="navbadge">'+pendingCount+'</span>' : '');
     var tabs = isManager()
       ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['approvals',approvalsTabLabel],['performance','Performance']]
-      : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['approvals',approvalsTabLabel]];
+      : isCoordinator()
+        ? [['orders','Orders'],['daily','My Daily Work'],['tasks','Tasks'],['approvals',approvalsTabLabel],['performance','Performance']]
+        : [['orders','My Orders'],['daily','My Daily Work'],['tasks','Tasks'],['upload','Upload PO'],['approvals',approvalsTabLabel]];
     el.innerHTML = tabs.map(function(t){
       return '<button class="navtab'+(VIEW===t[0]?' on':'')+'" onclick="showView(\''+t[0]+'\')">'+t[1]+'</button>';
     }).join('');
@@ -1345,8 +1367,8 @@
   // Render the "Add to Daily Work" button for a PO detail view
   function dwBtn(p) {
     if (!ME) return '';
-    var repId = ME.role === 'manager' ? null : ME.name; // manager uses modal picker
-    if (ME.role !== 'manager') {
+    var repId = isManagerOrCoord() ? null : ME.name; // manager/coordinator uses modal picker
+    if (!isManagerOrCoord()) {
       // Rep: show state-aware button
       if (dwHasToday(p.po_id, ME.name)) {
         return '<button class="btn" disabled style="color:var(--ok)">✓ In today\'s work</button>';
@@ -1386,7 +1408,9 @@
   }
 
   function fetchPerformanceData(month){
-    fetch(API + '?action=getPerformanceData&month=' + encodeURIComponent(month))
+    var url = API + '?action=getPerformanceData&month=' + encodeURIComponent(month);
+    if (isCoordinator()) url += '&coordinator=' + encodeURIComponent(ME.name);
+    fetch(url)
       .then(function(r){ return r.json(); })
       .then(function(res){
         PERF_DATA = res;
@@ -1432,7 +1456,7 @@
 
     // Rep selector pills
     html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:20px">'
-      + '<button class="chip'+(!PERF_SELECTED_REP?' on':'')+'" onclick="selectPerfRep(null)">Shakti Dispatch Team</button>'
+      + '<button class="chip'+(!PERF_SELECTED_REP?' on':'')+'" onclick="selectPerfRep(null)">'+(isCoordinator() ? 'My Team' : 'Shakti Dispatch Team')+'</button>'
       + reps.map(function(r){
           return '<button class="chip'+(PERF_SELECTED_REP===r.name?' on':'')+'" onclick="selectPerfRep(\''+esc(r.name)+'\')">'+esc(r.name)+'</button>';
         }).join('')
@@ -1596,7 +1620,12 @@
   function renderApprovalsPage(){
     var el = document.getElementById('approvalsPage'); if(!el) return;
     var mgr = isManager();
-    var myRequests = mgr ? APPROVALS : APPROVALS.filter(function(r){ return norm(r.requested_by)===norm(ME&&ME.name); });
+    var coord = isCoordinator();
+    // Coordinator sees all requests (full visibility), but can only decide on their reps' requests.
+    // The decide buttons are shown/hidden per tile below.
+    var myRequests = (mgr || coord)
+      ? APPROVALS
+      : APPROVALS.filter(function(r){ return norm(r.requested_by)===norm(ME&&ME.name); });
 
     var pending = myRequests.filter(function(r){ return norm(r.status)==='pending'; });
     var decided = myRequests.filter(function(r){ return norm(r.status)!=='pending'; })
@@ -1623,7 +1652,7 @@
         + '<div class="t-title">'+poTitle+'</div>'
         + '<div class="t-sub mono">'+poLabel+'</div>'
         + '</div>'+statusPill+'</div>'
-        + '<div class="status" style="margin-top:8px">'+typeTag+(mgr?('<span class="pill" style="background:var(--slate-soft);color:var(--slate)">'+esc(r.requested_by)+'</span>'):'')+'</div>'
+        + '<div class="status" style="margin-top:8px">'+typeTag+((mgr||coord)?('<span class="pill" style="background:var(--slate-soft);color:var(--slate)">'+esc(r.requested_by)+'</span>'):'')+'</div>'
         + '<div class="t-sub" style="margin-top:8px">'+esc(r.reason)+(r.remarks?(' — '+esc(r.remarks)):'')+'</div>'
         + (norm(r.status)!=='pending' && r.decided_by ? '<div class="t-sub" style="margin-top:4px;color:var(--faint)">Decided by '+esc(r.decided_by)+'</div>' : '')
         + (norm(r.status)==='rejected' && r.deny_reason ? '<div class="t-sub" style="margin-top:4px;color:var(--danger)">Denied: '+esc(r.deny_reason)+'</div>' : '')
@@ -1653,7 +1682,7 @@
 
     if (norm(p.closure_status) === 'closed') {
       // PO is closed — show reopen options instead
-      if (ME.role === 'manager') {
+      if (isManagerOrCoord()) {
         if (pendingReopenReq) {
           return '<button class="btn" onclick="openClosureDecisionModal(\''+esc(pendingReopenReq.request_id)+'\',\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')" style="color:var(--warn)">⚠ Reopen requested</button>';
         }
@@ -1667,7 +1696,7 @@
     }
 
     // PO is open — normal closure flow
-    if (ME.role === 'manager') {
+    if (isManagerOrCoord()) {
       if (pendingCloseReq) {
         return '<button class="btn" onclick="openClosureDecisionModal(\''+esc(pendingCloseReq.request_id)+'\',\''+esc(p.po_id)+'\',\''+esc(p.po_number)+'\')" style="color:var(--warn)">⚠ Closure requested</button>';
       }
@@ -1928,7 +1957,7 @@
   }
 
   function openPODlessModal(poId, invoiceId, invoiceNo) {
-    var mgr = isManager();
+    var mgr = isManagerOrCoord();
     var html = '<div class="modal-bg" onclick="if(event.target===this)closePODModal()" id="podModalBg">'
       + '<div class="modal">'
       + '<h3>Mark delivered without POD</h3>'
@@ -1949,7 +1978,7 @@
   function submitPODless(poId, invoiceId) {
     var reason = (document.getElementById('podlessReason').value || '').trim();
     if (!reason) { toast('Please provide a reason.'); return; }
-    var mgr = isManager();
+    var mgr = isManagerOrCoord();
     var btn = document.getElementById('podlessSubmitBtn');
     btn.disabled = true;
     btn.innerHTML = mgr ? '<span class="spin-sm"></span>Marking…' : '<span class="spin-sm"></span>Submitting…';
@@ -2032,7 +2061,7 @@
     var date = which === 'today' ? todayISO() : which === 'tomorrow' ? tomorrowISO() : document.getElementById('dwDatePick').value;
     if (!date) { toast('Please pick a date'); return; }
 
-    var repId = ME.role === 'manager'
+    var repId = isManagerOrCoord()
       ? (document.getElementById('dwRepSel') ? document.getElementById('dwRepSel').value : ME.name)
       : ME.name;
 
@@ -2258,18 +2287,18 @@
 
     // Daily Work entries for today (my own, or all reps if manager)
     var todayEntries = DAILY_WORK.filter(function(e){
-      return e.work_date === tod && !e.done && (ME&&ME.role==='manager' ? true : norm(e.rep_id)===meNorm);
+      return e.work_date === tod && !e.done && (isManagerOrCoord() ? (isCoordinator() ? MY_REPS.indexOf(e.rep_id)!==-1 : true) : norm(e.rep_id)===meNorm);
     });
     // Upcoming (future) entries
     var futureEntries = DAILY_WORK.filter(function(e){
-      return e.work_date > tod && !e.done && (ME&&ME.role==='manager' ? true : norm(e.rep_id)===meNorm);
+      return e.work_date > tod && !e.done && (isManagerOrCoord() ? (isCoordinator() ? MY_REPS.indexOf(e.rep_id)!==-1 : true) : norm(e.rep_id)===meNorm);
     }).sort(function(a,b){ return a.work_date < b.work_date ? -1 : 1; });
 
     function dwPoTile(entry) {
       var po = ALL.find(function(p){ return p.po_id === entry.po_id; });
       if (!po) return '';
       var carried = entry.carried_over ? '<span class="pill" style="background:var(--warn-soft);color:var(--warn)">Carried over</span>' : '';
-      var repTag = ME&&ME.role==='manager' ? '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">'+esc(entry.rep_id)+'</span>' : '';
+      var repTag = isManagerOrCoord() ? '<span class="pill" style="background:var(--slate-soft);color:var(--slate)">'+esc(entry.rep_id)+'</span>' : '';
       var reschedBtn = entry.work_date >= tod
         ? '<button class="btn" onclick="openRescheduleModal(\''+esc(entry.entry_id)+'\',\''+esc(po.po_number)+'\',\''+esc(entry.work_date)+'\')" style="font-size:12px">Reschedule</button>'
         : '';
