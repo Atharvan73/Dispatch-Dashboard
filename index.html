@@ -477,7 +477,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v4.3';
+  var VERSION = 'v4.4';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -593,7 +593,12 @@
       else if(REP_FILTER==='__unassigned__') base = ALL.filter(function(p){return !p.assigned_rep;});
       else base = ALL.filter(function(p){ return norm(p.assigned_rep)===norm(REP_FILTER); });
     } else {
-      base = ALL.filter(function(p){ return norm(p.assigned_rep) === norm(ME && ME.name); });
+      // Rep sees POs where they are the handling_rep (sub-assigned by coordinator)
+      // OR the assigned_rep (directly assigned by manager, no coordinator involved)
+      var meNorm = norm(ME && ME.name);
+      base = ALL.filter(function(p){
+        return norm(p.handling_rep) === meNorm || (!p.handling_rep && norm(p.assigned_rep) === meNorm);
+      });
     }
     if (FIRM_FILTER) base = base.filter(function(p){ return firmOf(p)===FIRM_FILTER; });
     return base;
@@ -601,13 +606,50 @@
 
   // Assignee cell: static for reps; assignee + Assign/Reassign button for the manager.
   function assignee(p){
-    var who = p.assigned_rep
-      ? '<span class="who"><span class="av">'+esc(initials(p.assigned_rep))+'</span>'+esc(p.assigned_rep)+'</span>'
-      : '<span class="who">'+ICON('user')+'Unassigned</span>';
+    var coord = p.assigned_rep;
+    var handler = p.handling_rep;
+
+    // Build the display — always show assigned_rep; show handling_rep below if set
+    var who;
+    if (!coord) {
+      who = '<span class="who">'+ICON('user')+'Unassigned</span>';
+    } else if (handler) {
+      // Two-level: coordinator on top, handler below
+      who = '<span class="who" style="flex-direction:column;align-items:flex-start;gap:2px">'
+          +   '<span style="display:flex;align-items:center;gap:6px"><span class="av">'+esc(initials(coord))+'</span>'+esc(coord)+'</span>'
+          +   '<span style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted);padding-left:2px">↳ <span class="av" style="width:18px;height:18px;font-size:9px">'+esc(initials(handler))+'</span>'+esc(handler)+'</span>'
+          + '</span>';
+    } else {
+      who = '<span class="who"><span class="av">'+esc(initials(coord))+'</span>'+esc(coord)+'</span>';
+    }
+
     if (!isManagerOrCoord()) return who;
-    var label = p.assigned_rep ? 'Reassign' : 'Assign';
-    return '<span class="assign-wrap" style="display:inline-flex;align-items:center;gap:10px">'+who
-      + '<button class="btn" onclick="event.stopPropagation();openAssign(\''+esc(p.po_id)+'\')">'+label+'</button></span>';
+
+    // Manager: shows Assign/Reassign button as before
+    if (isManager()) {
+      var label = coord ? 'Reassign' : 'Assign';
+      return '<span class="assign-wrap" style="display:inline-flex;align-items:center;gap:10px">'+who
+        + '<button class="btn" onclick="event.stopPropagation();openAssign(\''+esc(p.po_id)+'\')">'+label+'</button></span>';
+    }
+
+    // Coordinator: shows Assign (if unassigned and visible) or Sub-assign
+    if (isCoordinator()) {
+      if (!coord) {
+        // Unassigned PO — coordinator can assign to one of their reps
+        return '<span class="assign-wrap" style="display:inline-flex;align-items:center;gap:10px">'+who
+          + '<button class="btn" onclick="event.stopPropagation();openAssign(\''+esc(p.po_id)+'\')">Assign</button></span>';
+      }
+      if (norm(coord) === norm(ME && ME.name)) {
+        // This PO is assigned to this coordinator — show Sub-assign button
+        var subLabel = handler ? 'Re-assign' : 'Sub-assign';
+        return '<span class="assign-wrap" style="display:inline-flex;align-items:center;gap:10px">'+who
+          + '<button class="btn" onclick="event.stopPropagation();openSubAssign(\''+esc(p.po_id)+'\')">'+subLabel+'</button></span>';
+      }
+      // PO assigned to someone else — coordinator can see but not sub-assign
+      return who;
+    }
+
+    return who;
   }
 
   var ASSIGN_PO = null;
@@ -636,6 +678,11 @@
       + '<div class="fld"><label>Priority</label><div class="seg" id="amPrio">'+segs+'</div>'+caution+'</div>'
       + '<div class="fld"><label>Guidance for the rep (optional)</label>'
       +   '<textarea id="amNote" class="remark" placeholder="e.g. customer needs partial dispatch first; coordinate with vendor before packing">'+esc(p.manager_note||'')+'</textarea></div>'
+      + (p.handling_rep
+          ? '<div class="fld"><label>Current sub-assignment (handling)</label>'
+          +   '<div style="font-size:13px;color:var(--muted);margin-bottom:6px">'+esc(p.handling_rep)+' — will be cleared if you change the assignment above.</div>'
+          + '</div>'
+          : '')
       + '<div class="modal-actions"><button class="btn" onclick="closeAssign()">Cancel</button>'
       +   '<button class="btn go" onclick="saveAssign()">Save assignment</button></div>'
       + '</div></div>';
@@ -664,6 +711,55 @@
         else { p.assigned_rep=prev.rep; p.priority=prev.prio; p.manager_note=prev.note; refreshViews(); toast((res&&res.error)||'Could not save'); }
       })
       .catch(function(){ p.assigned_rep=prev.rep; p.priority=prev.prio; p.manager_note=prev.note; refreshViews(); toast('Network error'); });
+  }
+
+  /* ---- Sub-assign modal (coordinator only) ---- */
+  var SUBASSIGN_PO = null;
+  function openSubAssign(poId) {
+    var p = ALL.filter(function(x){ return String(x.po_id)===String(poId); })[0];
+    if (!p) return;
+    SUBASSIGN_PO = poId;
+    var repOpts = '<option value="">No sub-assignment (coordinator handles)</option>'
+      + MY_REPS.map(function(n){
+          return '<option value="'+esc(n)+'"'+(norm(n)===norm(p.handling_rep||'')?' selected':'')+'>'+esc(n)+'</option>';
+        }).join('');
+    var html = '<div class="modal-bg" onclick="if(event.target===this)closeSubAssign()"><div class="modal">'
+      + '<h3>Sub-assign order</h3>'
+      + '<div class="msub">'+esc(p.title||p.customer_name||'')+' · '+esc(p.po_number)+'</div>'
+      + (p.handling_rep ? '<div class="mgr-note" style="margin-bottom:12px">Currently handling: <b>'+esc(p.handling_rep)+'</b></div>' : '')
+      + '<div class="fld"><label>Assign handling to</label><select id="saRep" class="assign">'+repOpts+'</select></div>'
+      + '<div class="modal-actions">'
+      +   '<button class="btn" onclick="closeSubAssign()">Cancel</button>'
+      +   '<button class="btn go" id="saBtn" onclick="saveSubAssign()">Save</button>'
+      + '</div></div></div>';
+    document.getElementById('assignModal').innerHTML = html;
+  }
+  function closeSubAssign(){ document.getElementById('assignModal').innerHTML=''; SUBASSIGN_PO=null; }
+  function saveSubAssign(){
+    var poId = SUBASSIGN_PO; if (!poId) return;
+    var p = ALL.filter(function(x){ return String(x.po_id)===String(poId); })[0]; if (!p) return;
+    var handlingRep = document.getElementById('saRep').value;
+    var btn = document.getElementById('saBtn');
+    btn.disabled = true; btn.innerHTML = '<span class="spin-sm"></span>Saving…';
+    var prev = p.handling_rep || '';
+    p.handling_rep = handlingRep; // optimistic
+    refreshViews();
+    fetch(API, { method:'POST', body: JSON.stringify({
+      action: 'subAssign', po_id: poId, handling_rep: handlingRep,
+      by: (ME&&ME.name)||'', by_role: (ME&&ME.role)||''
+    })})
+      .then(function(r){ return r.json(); })
+      .then(function(res){
+        closeSubAssign();
+        if (res && res.ok) {
+          toast(handlingRep ? ('Sub-assigned to '+handlingRep) : 'Sub-assignment cleared');
+          load().then(refreshDetailOpen);
+        } else {
+          p.handling_rep = prev; refreshViews();
+          toast((res&&res.error)||'Could not save sub-assignment');
+        }
+      })
+      .catch(function(){ p.handling_rep = prev; refreshViews(); closeSubAssign(); toast('Network error'); });
   }
 
   function setStage(poId){
