@@ -580,6 +580,8 @@
       .then(function(){ load(); loadTasks(); });
   }
   function isManager(){ return ME && norm(ME.role) === 'manager'; }
+  function isCoordinator(){ return ME && norm(ME.role) === 'coordinator'; }
+  function isManagerOrCoord(){ return isManager() || isCoordinator(); }
   function scopedRows(){
     var base;
     if (isManager() || isCoordinator()){
