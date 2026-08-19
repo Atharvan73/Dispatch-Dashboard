@@ -477,7 +477,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v3.7';
+  var VERSION = 'v3.8';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -490,7 +490,7 @@
   var REP_FILTER = ''; // manager: '' = all, '__unassigned__', or a rep name
   var FIRM_FILTER = ''; // manager: '' = all firms, 'Shakti', or 'Universal'
   function firmOf(p){ return norm(p.firm)==='universal' ? 'Universal' : 'Shakti'; }
-  var CUTOFF = new Date(2026, 5, 5); // 5 Jun 2026 — POs dated before this are archived
+  var CUTOFF = new Date(2026, 7, 19); // 19 Aug 2026 — POs received before this are archived
   function isArchived(p){
     var d = parseDate(p.received_date) || parseDate(p.po_date);
     if (!d) return true; // no usable date at all — treat as archived/legacy, not visible
