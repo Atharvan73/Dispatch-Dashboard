@@ -477,7 +477,7 @@
   <div id="taskModal"></div>
 
 <script>
-  var VERSION = 'v4.4';
+  var VERSION = 'v4.5';
   document.getElementById('ver').textContent = VERSION;
 
   var ME = null;
@@ -497,16 +497,18 @@
     return d < CUTOFF;
   }
   var FILTERS = [
-    {key:'all',       label:'All',               test:function(){return true;}},
-    {key:'unassigned', label:'Unassigned',        test:function(p){return !p.assigned_rep;}},
-    {key:'myreps',    label:'My reps\' orders',  test:function(p){return MY_REPS.indexOf(p.assigned_rep)!==-1;}, coordOnly:true},
-    {key:'assignedme',label:'Assigned to me',    test:function(p){return norm(p.assigned_rep)===norm(ME&&ME.name);}, coordOnly:true},
-    {key:'overdue',   label:'Overdue',            test:function(p){return isOverdue(p);}},
-    {key:'new',       label:'New',                test:function(p){var a=ageDays(p);return a!=null && a<=2;}},
-    {key:'notdisp',   label:'Not dispatched',     test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
-    {key:'process',   label:'Under process',      test:function(p){return norm(p.processing_stage)!=='' && isOpen(p);}},
-    {key:'delivered', label:'Delivered',          test:function(p){return isFullyDelivered(p);}},
-    {key:'closed',    label:'Closed',             test:function(p){return norm(p.closure_status)==='closed';}}
+    {key:'all',        label:'All',             test:function(){return true;}},
+    {key:'unassigned', label:'Unassigned',       test:function(p){return !p.assigned_rep;}},
+    {key:'assignedme', label:'Assigned to me',   test:function(p){return norm(p.assigned_rep)===norm(ME&&ME.name);}, coordOnly:true},
+    {key:'subassigned',label:'Sub-assigned',     test:function(p){return norm(p.assigned_rep)===norm(ME&&ME.name) && !!p.handling_rep;}, coordOnly:true},
+    {key:'myteam',     label:'My team\'s work',  test:function(p){return MY_REPS.indexOf(p.handling_rep)!==-1;}, coordOnly:true},
+    {key:'overdue',    label:'Overdue',          test:function(p){return isOverdue(p);}},
+    {key:'new',        label:'New',              test:function(p){var a=ageDays(p);return a!=null && a<=2;}},
+    {key:'notdisp',    label:'Not dispatched',   test:function(p){return norm(p.dispatch_status)==='not dispatched';}},
+    {key:'dispatched', label:'Dispatched',       test:function(p){return norm(p.dispatch_status)==='dispatched';}},
+    {key:'process',    label:'Under process',    test:function(p){return norm(p.processing_stage)!=='' && isOpen(p);}},
+    {key:'delivered',  label:'Delivered',        test:function(p){return isFullyDelivered(p);}},
+    {key:'closed',     label:'Closed',           test:function(p){return norm(p.closure_status)==='closed';}}
   ];
 
   function norm(s){return String(s||'').trim().toLowerCase();}
